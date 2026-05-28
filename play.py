@@ -122,8 +122,13 @@ class HumanAgent(BaseAgent):
     def __init__(self) -> None:
         self._last_log_len = 0
         self._round_seen = 0
+        self._my_idx = 0
+        # 缓存本局所有事件（按玩家分类），跨回合可见
+        self._round_events: List[str] = []
+        self._round_events_round = 0
 
     def choose_action(self, state: GameState, my_idx: int) -> str:
+        self._my_idx = my_idx
         self._catch_up_logs(state)
         self._render(state, my_idx)
         while True:
@@ -142,8 +147,8 @@ class HumanAgent(BaseAgent):
             print(RED("  ?  请输入 d 或 f"))
 
     def choose_skill_target(self, state: GameState, my_idx: int, kind: CardKind) -> int:
+        self._my_idx = my_idx
         self._catch_up_logs(state)
-        # 强制送保险只能给别人；放逐/三连可以选自己（spec 允许"任意玩家"）
         if kind == CardKind.INSURANCE:
             candidates = [p for p in state.players if p.is_active and p.index != my_idx]
         else:
@@ -175,50 +180,101 @@ class HumanAgent(BaseAgent):
     def _catch_up_logs(self, state: GameState) -> None:
         new = state.log[self._last_log_len:]
         self._last_log_len = len(state.log)
+
+        # 检测换局，重置本局事件
         if state.round_number != self._round_seen:
             self._round_seen = state.round_number
-            print()
-            print(BOLD(CYAN(f"━━━━━━━━━━━━━━━━ 第 {state.round_number} 局 ━━━━━━━━━━━━━━━━")))
-        for line in new:
-            self._color_log(line)
+            self._round_events = []
 
-    @staticmethod
-    def _color_log(line: str) -> None:
-        cn = translate_log(line)
-        if "爆牌" in cn:
-            print(f"  {RED(cn)}")
-        elif "6翻了" in cn:
-            print(f"  {BOLD(YELLOW(cn))}")
-        elif "放逐" in cn or "三连" in cn:
-            print(f"  {MAGENTA(cn)}")
-        elif "保险" in cn:
-            print(f"  {BLUE(cn)}")
-        elif "加分" in cn or "翻倍" in cn:
-            print(f"  {GREEN(cn)}")
-        elif "跑路" in cn:
-            print(f"  {DIM(cn)}")
-        else:
-            print(f"  {cn}")
+        # 只把当前局的事件加入历史（log 形如 "R{n}|P{i}: ..."）
+        cur_prefix = f"R{state.round_number}|"
+        for line in new:
+            if line.startswith(cur_prefix):
+                self._round_events.append(line)
 
     def _render(self, state: GameState, my_idx: int) -> None:
         target = state.config.target_score
         print()
-        print(DIM(f"  目标分 {target}    剩余牌库 {state.remaining.total()} 张"))
-        print(DIM("  ─" * 32))
+        print(BOLD(CYAN(f"━━━━━━━━━━━━━ 第 {state.round_number} 局 ━━━━━━━━━━━━━")))
+        # 本局事件历史（最多 12 条，老的折叠）
+        if self._round_events:
+            print(DIM("  📜 本局已发生："))
+            shown = self._round_events
+            hidden = len(shown) - 12
+            if hidden > 0:
+                print(DIM(f"     … 上面省略 {hidden} 条早期事件 …"))
+                shown = shown[-12:]
+            for line in shown:
+                self._print_event(line, my_idx)
+            print()
+
+        # 当前局面
+        print(BOLD("  📊 当前局面：") + DIM(f"  目标 {target}    剩余牌库 {state.remaining.total()} 张"))
         for p in state.players:
-            you = BOLD(GREEN(" ★ 你")) if p.index == my_idx else "      "
-            st = self._status_str(p.status)
-            score_bar = self._bar(p.total_score, target, 20)
-            line = (f"   P{p.index}{you}  {st}  "
-                    f"总分={p.total_score:>3} {score_bar}  本局=+{p.current_round_score():>3}")
-            print(line)
-            if p.index == my_idx:
-                hand_str = ", ".join(str(n) for n in sorted(p.hand_numbers)) or DIM("(空)")
-                ins = GREEN("有") if p.has_insurance else DIM("无")
-                bonus = f"+{p.bonus_flat_total}" if p.bonus_flat_total else "0"
-                print(f"        手牌：[{hand_str}]   加分：{bonus}   保险：{ins}")
-                self._render_my_hint(state, p)
-        print(DIM("  ─" * 32))
+            self._render_player(state, p, my_idx)
+        print()
+
+    def _print_event(self, line: str, my_idx: int) -> None:
+        cn = translate_log(line)
+        # 提取 P 编号
+        m = re.match(r"R\d+\|P(\d+):\s*(.*)", cn)
+        if m:
+            pid = int(m.group(1))
+            event = m.group(2)
+            tag = BOLD(GREEN("★ 你 ")) if pid == my_idx else f"P{pid}    "
+            # 给事件本身上色
+            event_colored = self._colorize_event_text(event)
+            print(f"     {tag} {event_colored}")
+        else:
+            print(f"     {cn}")
+
+    @staticmethod
+    def _colorize_event_text(text: str) -> str:
+        if "爆牌" in text:
+            return RED(text)
+        if "6翻了" in text:
+            return BOLD(YELLOW(text))
+        if "放逐" in text or "三连" in text:
+            return MAGENTA(text)
+        if "保险" in text:
+            return BLUE(text)
+        if "加分" in text or "翻倍" in text:
+            return GREEN(text)
+        if "跑路" in text:
+            return DIM(text)
+        if "抽到数字" in text:
+            return CYAN(text)
+        return text
+
+    def _render_player(self, state: GameState, p, my_idx: int) -> None:
+        target = state.config.target_score
+        is_me = p.index == my_idx
+        emoji = self._status_emoji(p.status)
+        marker = BOLD(GREEN(" ★ 你")) if is_me else "     "
+        bar = self._bar(p.total_score, target, 16)
+
+        if is_me:
+            hand_str = ", ".join(str(n) for n in sorted(p.hand_numbers)) or DIM("(空)")
+            ins = GREEN(" [保险]") if p.has_insurance else ""
+            bonus = f" 加分+{p.bonus_flat_total}" if p.bonus_flat_total else ""
+            cur = sum(p.hand_numbers) + p.bonus_flat_total
+            print(f"  {emoji} P{p.index}{marker}  {self._status_str(p.status)}  总分 {BOLD(str(p.total_score)):>3} {bar}")
+            print(f"           手牌 [{BOLD(hand_str)}]{bonus}{ins}    本局 +{BOLD(str(cur))}")
+            self._render_my_hint(state, p)
+        else:
+            hand_str = ",".join(str(n) for n in sorted(p.hand_numbers))
+            ins = GREEN(" [保险]") if p.has_insurance else ""
+            line2 = f"手牌[{hand_str}]{ins}" if hand_str else DIM("(空手)")
+            print(f"  {emoji} P{p.index}{marker}  {self._status_str(p.status)}  总分 {p.total_score:>3} {bar}  本局 +{p.current_round_score():>2}  {line2}")
+
+    @staticmethod
+    def _status_emoji(status: PlayerStatus) -> str:
+        return {
+            PlayerStatus.ACTIVE: "🎲",
+            PlayerStatus.FOLDED: "🔒",
+            PlayerStatus.BUSTED: "💥",
+            PlayerStatus.EXILED: "🚷",
+        }.get(status, "  ")
 
     @staticmethod
     def _status_str(status: PlayerStatus) -> str:
@@ -247,18 +303,18 @@ class HumanAgent(BaseAgent):
 
         hint_parts = []
         if me.total_score + cur >= state.config.target_score:
-            hint_parts.append(BOLD(GREEN("现在跑路即可获胜！")))
+            hint_parts.append(BOLD(GREEN("🏆 现在跑路即可获胜！")))
         else:
             color = GREEN if bust_p < 15 else YELLOW if bust_p < 30 else RED
-            hint_parts.append(f"爆牌概率：{color(f'{bust_p:.0f}%')}")
+            hint_parts.append(f"爆牌概率 {color(f'{bust_p:.0f}%')}")
 
             if unique == 5:
                 safe_count = sum(c for v, c in rem.numbers.items() if v not in me.unique_numbers)
                 safe_p = safe_count / total * 100
-                hint_parts.append(BOLD(YELLOW(f"6翻成功率：{safe_p:.0f}%")))
+                hint_parts.append(BOLD(YELLOW(f"6翻成功率 {safe_p:.0f}% 🚀")))
             hint_parts.append(f"跑路锁 {cur} 分")
 
-        print(f"        {DIM('提示：')} " + "    ".join(hint_parts))
+        print(f"           💡 " + "    ".join(hint_parts))
 
 
 # --------------------------------------------------------------- AI 注册
