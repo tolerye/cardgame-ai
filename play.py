@@ -181,12 +181,21 @@ class HumanAgent(BaseAgent):
         new = state.log[self._last_log_len:]
         self._last_log_len = len(state.log)
 
-        # 检测换局，重置本局事件
+        # 跨局了：上局的尾部事件（如三连结果、6翻、其他玩家最后行动）应该回放出来
         if state.round_number != self._round_seen:
+            prev_round = self._round_seen
+            if prev_round > 0:
+                tail = [l for l in new if l.startswith(f"R{prev_round}|")]
+                if tail:
+                    print()
+                    print(DIM(f"  📜 第 {prev_round} 局后续："))
+                    for line in tail:
+                        self._print_event(line, self._my_idx)
+            # 重置本局
             self._round_seen = state.round_number
             self._round_events = []
 
-        # 只把当前局的事件加入历史（log 形如 "R{n}|P{i}: ..."）
+        # 把属于当前局的事件加入历史
         cur_prefix = f"R{state.round_number}|"
         for line in new:
             if line.startswith(cur_prefix):
