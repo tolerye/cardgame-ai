@@ -3,10 +3,16 @@
 - 每次自动保存 checkpoint
 - 维护 model_best.pt（raw 胜率最高的版本）
 - 连续 2 次 raw 胜率低于 baseline-3pp 时自动早停 + 回滚到 best
+
+CLI 示例:
+    python3 train_overnight.py                          # 默认 300 iter × 120 game
+    python3 train_overnight.py --iters 800 --games 200  # 更多游戏
+    python3 train_overnight.py --no-resume              # 从随机权重起步
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import shutil
 import subprocess
@@ -15,16 +21,19 @@ import time
 from pathlib import Path
 
 
-MAX_ITERS = 300
-EVAL_EVERY = 30
-GAMES_PER_ITER = 120
-N_SIMS = 80
-WORKERS = 6
-EVAL_MATCHES = 200
-BASELINE_RAW = 21.5      # v5 model raw policy 胜率
-EARLY_STOP_DROP = 3.0    # raw < baseline - 3pp 算退化
+# 默认值（被 argparse 覆盖）
+DEFAULTS = {
+    "iters": 300,
+    "eval_every": 30,
+    "games": 120,
+    "n_sims": 80,
+    "workers": 6,
+    "eval_matches": 200,
+    "baseline_raw": 21.5,
+    "early_stop_drop": 3.0,
+}
 
-REPO = Path("/Users/tolerye/projects/cardgame-ai")
+REPO = Path(__file__).resolve().parent
 CKPT_DIR = REPO / "checkpoints"
 CKPT_DIR.mkdir(exist_ok=True)
 
@@ -35,7 +44,6 @@ def log(msg: str) -> None:
 
 
 def run(cmd: list[str], capture: bool = False) -> tuple[int, str]:
-    """Run subprocess; if capture, return stdout; else stream to current stdout."""
     if capture:
         r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
         return r.returncode, r.stdout + r.stderr
@@ -49,87 +57,105 @@ def extract_neural_pct(eval_output: str) -> float | None:
 
 
 def main() -> None:
-    log(f"start. baseline raw = {BASELINE_RAW}%, total {MAX_ITERS} iter, eval every {EVAL_EVERY}")
+    parser = argparse.ArgumentParser(description="Overnight training orchestrator")
+    parser.add_argument("--iters", type=int, default=DEFAULTS["iters"], help="总 iter 数")
+    parser.add_argument("--eval-every", type=int, default=DEFAULTS["eval_every"], help="每 N iter 评测一次")
+    parser.add_argument("--games", type=int, default=DEFAULTS["games"], help="每 iter 的 self-play game 数")
+    parser.add_argument("--n-sims", type=int, default=DEFAULTS["n_sims"], help="每次决策的 MCTS 模拟数")
+    parser.add_argument("--workers", type=int, default=DEFAULTS["workers"], help="并行 worker 数")
+    parser.add_argument("--eval-matches", type=int, default=DEFAULTS["eval_matches"], help="每次 eval 跑多少局")
+    parser.add_argument("--baseline-raw", type=float, default=DEFAULTS["baseline_raw"],
+                        help="raw 胜率基线 %（早停参考）")
+    parser.add_argument("--early-stop-drop", type=float, default=DEFAULTS["early_stop_drop"],
+                        help="低于 baseline 多少 pp 算退化")
+    parser.add_argument("--no-resume", action="store_true", help="从随机权重起步")
+    parser.add_argument("--out", default="model.pt", help="模型输出路径")
+    parser.add_argument("--ckpt-prefix", default="model_iter", help="checkpoint 前缀")
+    args = parser.parse_args()
+
+    log(f"start: {args.iters} iter @ {args.games} game/iter, {args.n_sims} sims, {args.workers} workers")
+    log(f"eval every {args.eval_every} iter, baseline={args.baseline_raw}%")
 
     # 备份起点
-    shutil.copy(REPO / "model.pt", CKPT_DIR / "model_overnight_start.pt")
-    shutil.copy(REPO / "model.pt", CKPT_DIR / "model_best.pt")
+    if not args.no_resume and (REPO / args.out).exists():
+        shutil.copy(REPO / args.out, CKPT_DIR / "model_overnight_start.pt")
+        shutil.copy(REPO / args.out, CKPT_DIR / "model_best.pt")
+    else:
+        # 从头起步：把 best 标记成空（首次 eval 后写入）
+        log("starting from scratch (no --resume)")
 
-    best_raw = BASELINE_RAW
+    best_raw = args.baseline_raw
     low_streak = 0
     history: list[tuple[int, float]] = []
 
-    n_batches = MAX_ITERS // EVAL_EVERY
+    n_batches = args.iters // args.eval_every
     for batch in range(n_batches):
-        iter_done = (batch + 1) * EVAL_EVERY
-        iter_from = batch * EVAL_EVERY + 1
+        iter_done = (batch + 1) * args.eval_every
+        iter_from = batch * args.eval_every + 1
         log(f"━━━━━━━━ Batch {batch+1}/{n_batches}: training iter {iter_from} → {iter_done} ━━━━━━━━")
 
-        rc, _ = run([
+        cmd = [
             "python3", "-m", "train.selfplay",
-            "--resume", "model.pt",
-            "--iters", str(EVAL_EVERY),
-            "--games-per-iter", str(GAMES_PER_ITER),
-            "--workers", str(WORKERS),
-            "--n-sims", str(N_SIMS),
-            "--out", "model.pt",
-        ])
+            "--iters", str(args.eval_every),
+            "--games-per-iter", str(args.games),
+            "--workers", str(args.workers),
+            "--n-sims", str(args.n_sims),
+            "--out", args.out,
+        ]
+        # 第一批 + no-resume 时不传 --resume；之后每批都从上次的 out 续训
+        if not (batch == 0 and args.no_resume):
+            cmd += ["--resume", args.out]
+
+        rc, _ = run(cmd)
         if rc != 0:
             log(f"⚠ training subprocess failed (rc={rc})")
             break
 
-        # 保存 checkpoint
-        shutil.copy(REPO / "model.pt", CKPT_DIR / f"model_iter_{iter_done}.pt")
-        log(f"saved checkpoint: checkpoints/model_iter_{iter_done}.pt")
+        shutil.copy(REPO / args.out, CKPT_DIR / f"{args.ckpt_prefix}_{iter_done}.pt")
+        log(f"saved checkpoint: checkpoints/{args.ckpt_prefix}_{iter_done}.pt")
 
-        # Eval
         rc, output = run([
             "python3", "eval_neural.py",
-            "--model", "model.pt",
-            "-n", str(EVAL_MATCHES),
-            "--workers", str(WORKERS),
+            "--model", args.out,
+            "-n", str(args.eval_matches),
+            "--workers", str(args.workers),
         ], capture=True)
         if rc != 0:
             log(f"⚠ eval failed (rc={rc}): {output[:500]}")
             continue
 
-        # 解析 neural raw 胜率
         raw_pct = extract_neural_pct(output)
         if raw_pct is None:
             log(f"⚠ failed to parse eval output:\n{output[:500]}")
             continue
         history.append((iter_done, raw_pct))
-        log(f"📊 iter {iter_done}: raw policy = {raw_pct:.1f}%  (baseline {BASELINE_RAW}%)")
+        log(f"📊 iter {iter_done}: raw policy = {raw_pct:.1f}%  (baseline {args.baseline_raw}%)")
 
-        # 维护 best
         if raw_pct > best_raw:
             best_raw = raw_pct
-            shutil.copy(REPO / "model.pt", CKPT_DIR / "model_best.pt")
+            shutil.copy(REPO / args.out, CKPT_DIR / "model_best.pt")
             log(f"  ✓ new best: {raw_pct:.1f}% → checkpoints/model_best.pt")
 
-        # 早停判断
-        if raw_pct < BASELINE_RAW - EARLY_STOP_DROP:
+        if raw_pct < args.baseline_raw - args.early_stop_drop:
             low_streak += 1
             log(f"  ⚠ retrograde streak {low_streak}/2")
             if low_streak >= 2:
-                log(f"🛑 early stop after retrograde streak. rolling back to best ({best_raw:.1f}%)")
-                shutil.copy(CKPT_DIR / "model_best.pt", REPO / "model.pt")
+                log(f"🛑 early stop. rolling back to best ({best_raw:.1f}%)")
+                shutil.copy(CKPT_DIR / "model_best.pt", REPO / args.out)
                 break
         else:
             low_streak = 0
 
-    # 最终汇报
     log("")
     log("━━━━━━━━━━━━━━━━ DONE ━━━━━━━━━━━━━━━━")
     log(f"best raw policy: {best_raw:.1f}%")
     log("history:")
     for it, pct in history:
         marker = " ←" if pct == best_raw else ""
-        log(f"  iter {it:>3}  raw={pct:>5.1f}%{marker}")
-    log(f"final model: {'已回滚到 best' if low_streak >= 2 else '完整训练完成'}")
+        log(f"  iter {it:>4}  raw={pct:>5.1f}%{marker}")
     log("checkpoints saved in checkpoints/")
-    log("启动器：python3 train_overnight.py")
 
 
 if __name__ == "__main__":
     main()
+
