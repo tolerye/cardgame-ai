@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 from agents.ev_agent import EVAgent
 from agents.expectimax_agent import ExpectimaxAgent
 from game import GameConfig
-from game.cards import (BONUS_FLAT_COUNT, BONUS_DOUBLE_COUNT, NUMBER_COUNTS,
+from game.cards import (BONUS_FLAT_AVG, BONUS_FLAT_COUNT, BONUS_DOUBLE_COUNT, NUMBER_COUNTS,
                         SKILL_PER_KIND, DeckCounts)
 from game.state import GameState, PlayerState, PlayerStatus
 
@@ -158,7 +158,7 @@ def analyze(state: GameState, my_idx: int) -> dict:
     ev_draw += p_bust * (cur_score + ev_bust_cost)  # 爆牌路径
     ev_draw += p_continue_with_safe * (cur_score + avg_safe_value)  # 安全（未触六翻）
     ev_draw += p_six * (cur_score + avg_safe_value + 15)  # 6 翻终结
-    ev_draw += p_flat * (cur_score + 10)
+    ev_draw += p_flat * (cur_score + BONUS_FLAT_AVG)
     ev_draw += p_double * (cur_score + sum(me.hand_numbers))  # 翻倍数字总和
     ev_draw += (p_ins + p_exile + p_triple) * (cur_score + 5)  # 技能粗估 +5
 
@@ -212,7 +212,7 @@ def render_analysis(a: dict, state: GameState, my_idx: int) -> None:
         six_pct_str = f"{a['p_six']:>5.1f}%"
         six_pct = BOLD(YELLOW(six_pct_str)) if a["p_six"] > 50 else YELLOW(six_pct_str)
         print(f"    🚀 6 翻终结：{six_pct}    +15 奖励 + 强制全场结算")
-    print(f"    🟢 +10 加分： {a['p_flat']:>5.1f}%")
+    print(f"    🟢 加分牌（+2~+10 平均 +6）： {a['p_flat']:>5.1f}%")
     print(f"    🟢 翻倍：     {a['p_double']:>5.1f}%    +{sum(me.hand_numbers)} 分")
     print(f"    🛡 保险：     {a['p_ins']:>5.1f}%")
     print(f"    🚷 放逐：     {a['p_exile']:>5.1f}%")
