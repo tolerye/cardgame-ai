@@ -1,16 +1,18 @@
-"""Interactive terminal frontend for the card game.
+"""终端交互版游戏。
 
-You play as P0; the other three seats are AI agents (default: expectimax, ev,
-greedy). Run:
+你是 P0，其余三个座位是 AI（默认 expectimax / ev / greedy）。
 
     python3 play.py
-    python3 play.py --opponents neural,expectimax,ev   # custom lineup
-    python3 play.py --target 100                       # shorter match"""
+    python3 play.py --opponents expectimax,expectimax,expectimax   # 最强对手
+    python3 play.py --opponents neural,expectimax,ev               # 含训练好的 NN
+    python3 play.py --target 100                                   # 短局
+"""
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from typing import Dict, List
 
@@ -21,7 +23,6 @@ from game.cards import CardKind
 from game.state import GameState, PlayerStatus
 
 
-# ANSI colors — disable on Windows or when piped to a non-tty.
 USE_COLOR = sys.stdout.isatty() and os.environ.get("TERM") != "dumb"
 
 
@@ -41,7 +42,80 @@ BLUE = lambda t: C("34", t)
 MAGENTA = lambda t: C("35", t)
 
 
-# --------------------------------------------------------------- HumanAgent
+# 状态翻译
+STATUS_CN = {
+    PlayerStatus.ACTIVE: "进行中",
+    PlayerStatus.FOLDED: "已跑路",
+    PlayerStatus.BUSTED: "已爆牌",
+    PlayerStatus.EXILED: "被放逐",
+}
+
+# 技能牌中文
+KIND_CN = {
+    CardKind.EXILE: "放逐",
+    CardKind.TRIPLE: "三连",
+    CardKind.INSURANCE: "保险",
+}
+
+# 引擎 log 行翻译（按关键字）
+def translate_log(line: str) -> str:
+    """Translate engine log strings to Chinese.
+    Format: "R{n}|P{i}: EVENT details" → "R{n}|P{i}: 中文描述"."""
+    # SIX-BURST! lock=NN
+    m = re.match(r"^(R\d+\|P\d+): SIX-BURST! lock=(\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 6翻了！锁分 {m.group(2)}"
+    # FOLD lock=NN
+    m = re.match(r"^(R\d+\|P\d+): FOLD lock=(\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 跑路 锁分 {m.group(2)}"
+    # DRAW N
+    m = re.match(r"^(R\d+\|P\d+): DRAW (\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 抽到数字 {m.group(2)}"
+    # BUST_AVOIDED on N
+    m = re.match(r"^(R\d+\|P\d+): BUST_AVOIDED on (\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 重复 {m.group(2)} 但保险消耗（免爆）"
+    # BUST on N
+    m = re.match(r"^(R\d+\|P\d+): BUST on (\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 爆牌！抽到重复的 {m.group(2)}"
+    # BONUS+10
+    m = re.match(r"^(R\d+\|P\d+): BONUS\+(\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 抽到加分牌 +{m.group(2)}"
+    # DOUBLE +N
+    m = re.match(r"^(R\d+\|P\d+): DOUBLE \+(\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 抽到翻倍牌 当前数字总和翻倍 +{m.group(2)}"
+    # INSURANCE+
+    m = re.match(r"^(R\d+\|P\d+): INSURANCE\+$", line)
+    if m:
+        return f"{m.group(1)}: 获得保险"
+    # INSURANCE -> PN
+    m = re.match(r"^(R\d+\|P\d+): INSURANCE -> P(\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 强制赠送保险给 P{m.group(2)}"
+    # INSURANCE wasted
+    if "INSURANCE wasted" in line:
+        return line.replace("INSURANCE wasted (no targets)", "保险作废（无可送对象）")
+    # EXILE -> PN lock=NN
+    m = re.match(r"^(R\d+\|P\d+): EXILE -> P(\d+) lock=(\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 放逐 P{m.group(2)} 锁分 {m.group(3)}"
+    if "EXILE wasted" in line:
+        return line.replace("EXILE wasted (no targets)", "放逐作废（无可选目标）")
+    # TRIPLE -> PN
+    m = re.match(r"^(R\d+\|P\d+): TRIPLE -> P(\d+)$", line)
+    if m:
+        return f"{m.group(1)}: 三连 -> P{m.group(2)} 强制摸 3 张"
+    if "TRIPLE wasted" in line:
+        return line.replace("TRIPLE wasted (no targets)", "三连作废（无可选目标）")
+    return line
+
+
+# --------------------------------------------------------------- 人类玩家
 class HumanAgent(BaseAgent):
     name = "human"
 
@@ -49,111 +123,113 @@ class HumanAgent(BaseAgent):
         self._last_log_len = 0
         self._round_seen = 0
 
-    # ----- main decision -----
     def choose_action(self, state: GameState, my_idx: int) -> str:
         self._catch_up_logs(state)
         self._render(state, my_idx)
         while True:
             try:
-                raw = input(BOLD(f"\n  P{my_idx} (YOU) → action [d=draw, f=fold, q=quit]: ")).strip().lower()
+                raw = input(BOLD(f"\n  P{my_idx}（你）→ 选择 [d=要牌, f=跑路, q=退出]: ")).strip().lower()
             except (KeyboardInterrupt, EOFError):
-                print("\n  exiting...")
+                print("\n  退出。")
                 sys.exit(0)
-            if raw in ("d", "draw", ""):
+            if raw in ("d", "draw", "要牌", ""):
                 return "draw"
-            if raw in ("f", "fold"):
+            if raw in ("f", "fold", "跑路"):
                 return "fold"
-            if raw in ("q", "quit", "exit"):
-                print("  bye.")
+            if raw in ("q", "quit", "exit", "退出"):
+                print("  再见。")
                 sys.exit(0)
-            print(RED("  ?  use 'd' or 'f'"))
+            print(RED("  ?  请输入 d 或 f"))
 
-    # ----- skill targeting -----
     def choose_skill_target(self, state: GameState, my_idx: int, kind: CardKind) -> int:
         self._catch_up_logs(state)
-        candidates = [p for p in state.players if p.is_active and p.index != my_idx]
+        # 强制送保险只能给别人；放逐/三连可以选自己（spec 允许"任意玩家"）
+        if kind == CardKind.INSURANCE:
+            candidates = [p for p in state.players if p.is_active and p.index != my_idx]
+        else:
+            candidates = [p for p in state.players if p.is_active]
         if not candidates:
             return my_idx
-        prompt = {
-            CardKind.EXILE: "force this player to fold (lock their round score)",
-            CardKind.TRIPLE: "force this player to draw 3 cards",
-            CardKind.INSURANCE: "gift insurance to (you already have one)",
-        }.get(kind, "target")
-        print(MAGENTA(f"\n  ★ {kind.value.upper()}: {prompt}"))
+        prompt_cn = {
+            CardKind.EXILE: "选择强制跑路的对象（锁定本局得分）。可选自己（自我锁分）。",
+            CardKind.TRIPLE: "选择强制摸 3 张的对象。可选自己（如已 5 张不同数字想冲 6 翻）。",
+            CardKind.INSURANCE: "你已有保险，必须把这张转送给一名其他玩家",
+        }.get(kind, "选择目标")
+        print(MAGENTA(f"\n  ★ {KIND_CN.get(kind, kind.value)}：{prompt_cn}"))
         for i, p in enumerate(candidates):
-            ins = " [INS]" if p.has_insurance else ""
+            ins = " [保险]" if p.has_insurance else ""
             hand = " ".join(str(n) for n in sorted(p.hand_numbers))
-            print(f"    {i}: P{p.index}  total={p.total_score:>3}  round={p.current_round_score():>3}  "
-                  f"hand=[{hand}]{ins}")
+            mark = BOLD(GREEN(" ← 你")) if p.index == my_idx else ""
+            print(f"    {i}：P{p.index}{mark}  总分={p.total_score:>3}  本局={p.current_round_score():>3}  "
+                  f"手牌=[{hand}]{ins}")
         while True:
             try:
-                raw = input("    pick [number]: ").strip()
+                raw = input("    输入编号：").strip()
                 idx = int(raw)
                 if 0 <= idx < len(candidates):
                     return candidates[idx].index
             except (ValueError, KeyboardInterrupt, EOFError):
                 pass
-            print(RED("    invalid index"))
+            print(RED("    无效编号"))
 
-    # ----- log replay -----
     def _catch_up_logs(self, state: GameState) -> None:
         new = state.log[self._last_log_len:]
         self._last_log_len = len(state.log)
         if state.round_number != self._round_seen:
             self._round_seen = state.round_number
             print()
-            print(BOLD(CYAN(f"━━━━━━━━━━━━━━━━ Round {state.round_number} ━━━━━━━━━━━━━━━━")))
+            print(BOLD(CYAN(f"━━━━━━━━━━━━━━━━ 第 {state.round_number} 局 ━━━━━━━━━━━━━━━━")))
         for line in new:
             self._color_log(line)
 
     @staticmethod
     def _color_log(line: str) -> None:
-        if "BUST" in line and "AVOIDED" not in line:
-            print(f"  {RED(line)}")
-        elif "SIX-BURST" in line:
-            print(f"  {BOLD(YELLOW(line))}")
-        elif "EXILE" in line or "TRIPLE" in line:
-            print(f"  {MAGENTA(line)}")
-        elif "INSURANCE" in line:
-            print(f"  {BLUE(line)}")
-        elif "BONUS" in line or "DOUBLE" in line:
-            print(f"  {GREEN(line)}")
-        elif "FOLD" in line:
-            print(f"  {DIM(line)}")
+        cn = translate_log(line)
+        if "爆牌" in cn:
+            print(f"  {RED(cn)}")
+        elif "6翻了" in cn:
+            print(f"  {BOLD(YELLOW(cn))}")
+        elif "放逐" in cn or "三连" in cn:
+            print(f"  {MAGENTA(cn)}")
+        elif "保险" in cn:
+            print(f"  {BLUE(cn)}")
+        elif "加分" in cn or "翻倍" in cn:
+            print(f"  {GREEN(cn)}")
+        elif "跑路" in cn:
+            print(f"  {DIM(cn)}")
         else:
-            print(f"  {line}")
+            print(f"  {cn}")
 
-    # ----- table render -----
     def _render(self, state: GameState, my_idx: int) -> None:
         target = state.config.target_score
         print()
-        print(DIM(f"  Target {target}.  Cards left in deck: {state.remaining.total()}"))
+        print(DIM(f"  目标分 {target}    剩余牌库 {state.remaining.total()} 张"))
         print(DIM("  ─" * 32))
         for p in state.players:
-            you = BOLD(GREEN(" ★ YOU")) if p.index == my_idx else "      "
+            you = BOLD(GREEN(" ★ 你")) if p.index == my_idx else "      "
             st = self._status_str(p.status)
             score_bar = self._bar(p.total_score, target, 20)
             line = (f"   P{p.index}{you}  {st}  "
-                    f"total={p.total_score:>3} {score_bar}  round=+{p.current_round_score():>3}")
+                    f"总分={p.total_score:>3} {score_bar}  本局=+{p.current_round_score():>3}")
             print(line)
             if p.index == my_idx:
-                hand_str = ", ".join(str(n) for n in sorted(p.hand_numbers)) or DIM("(empty)")
-                ins = GREEN("YES") if p.has_insurance else DIM("no")
+                hand_str = ", ".join(str(n) for n in sorted(p.hand_numbers)) or DIM("(空)")
+                ins = GREEN("有") if p.has_insurance else DIM("无")
                 bonus = f"+{p.bonus_flat_total}" if p.bonus_flat_total else "0"
-                print(f"        hand: [{hand_str}]   bonus: {bonus}   insurance: {ins}")
+                print(f"        手牌：[{hand_str}]   加分：{bonus}   保险：{ins}")
                 self._render_my_hint(state, p)
         print(DIM("  ─" * 32))
 
     @staticmethod
     def _status_str(status: PlayerStatus) -> str:
-        s = status.value
+        s = STATUS_CN.get(status, status.value)
         if status == PlayerStatus.ACTIVE:
-            return GREEN(f"{s:<7}")
+            return GREEN(f"{s:<4}")
         if status == PlayerStatus.FOLDED:
-            return DIM(f"{s:<7}")
+            return DIM(f"{s:<4}")
         if status == PlayerStatus.BUSTED:
-            return RED(f"{s:<7}")
-        return MAGENTA(f"{s:<7}")
+            return RED(f"{s:<4}")
+        return MAGENTA(f"{s:<4}")
 
     @staticmethod
     def _bar(score: int, target: int, width: int) -> str:
@@ -162,7 +238,6 @@ class HumanAgent(BaseAgent):
 
     @staticmethod
     def _render_my_hint(state: GameState, me) -> None:
-        """Tell the human what's risky."""
         rem = state.remaining
         total = max(rem.total(), 1)
         bust_count = sum(rem.numbers[v] for v in me.unique_numbers)
@@ -172,27 +247,37 @@ class HumanAgent(BaseAgent):
 
         hint_parts = []
         if me.total_score + cur >= state.config.target_score:
-            hint_parts.append(BOLD(GREEN("Folding now WINS the match.")))
+            hint_parts.append(BOLD(GREEN("现在跑路即可获胜！")))
         else:
             color = GREEN if bust_p < 15 else YELLOW if bust_p < 30 else RED
-            hint_parts.append(f"bust prob: {color(f'{bust_p:.0f}%')}")
+            hint_parts.append(f"爆牌概率：{color(f'{bust_p:.0f}%')}")
 
             if unique == 5:
                 safe_count = sum(c for v, c in rem.numbers.items() if v not in me.unique_numbers)
                 safe_p = safe_count / total * 100
-                hint_parts.append(BOLD(YELLOW(f"6-burst chance: {safe_p:.0f}%")))
-            hint_parts.append(f"fold locks {cur}")
+                hint_parts.append(BOLD(YELLOW(f"6翻成功率：{safe_p:.0f}%")))
+            hint_parts.append(f"跑路锁 {cur} 分")
 
-        print(f"        {DIM('hint:')} " + "   ".join(hint_parts))
+        print(f"        {DIM('提示：')} " + "    ".join(hint_parts))
 
 
-# --------------------------------------------------------------- main
+# --------------------------------------------------------------- AI 注册
 OPP_REGISTRY: Dict[str, callable] = {
     "expectimax": lambda: ExpectimaxAgent(),
     "ev": lambda: EVAgent(),
     "greedy": lambda: GreedyAgent(),
     "greedy20": lambda: GreedyAgent(fold_at=20),
     "random": lambda: RandomAgent(),
+}
+
+OPP_NAME_CN = {
+    "expectimax": "期望值递归（最强 40%）",
+    "ev": "启发式期望（35%）",
+    "greedy": "固定阈值贪心（24%）",
+    "greedy20": "激进贪心",
+    "random": "随机",
+    "neural": "神经网络（21%）",
+    "neural_mcts": "神经网络+搜索",
 }
 
 
@@ -207,40 +292,42 @@ def _maybe_register_neural() -> None:
 
 def main() -> None:
     _maybe_register_neural()
-    parser = argparse.ArgumentParser(description="Play the card game in your terminal.")
+    parser = argparse.ArgumentParser(description="终端版牌局对战")
     parser.add_argument("--opponents", default="expectimax,ev,greedy",
-                        help="comma-separated AI opponents (3 total).")
-    parser.add_argument("--target", type=int, default=200, help="match target score")
-    parser.add_argument("--list", action="store_true", help="list available AI types and exit")
+                        help="3 个 AI 对手，逗号分隔")
+    parser.add_argument("--target", type=int, default=200, help="比赛目标分（默认 200）")
+    parser.add_argument("--list", action="store_true", help="列出所有可用 AI 类型")
     args = parser.parse_args()
 
     if args.list:
-        print("Available opponents:")
+        print("可用 AI 类型：")
         for name in OPP_REGISTRY:
-            print(f"  {name}")
+            cn = OPP_NAME_CN.get(name, "")
+            print(f"  {name:<14} {cn}")
         return
 
     names = [n.strip() for n in args.opponents.split(",")]
     if len(names) != 3:
-        print(f"need exactly 3 opponents, got {len(names)}")
+        print(f"必须正好 3 个对手，给了 {len(names)} 个")
         sys.exit(1)
     for n in names:
         if n not in OPP_REGISTRY:
-            print(f"unknown opponent '{n}' — try --list")
+            print(f"未知对手 '{n}' — 用 --list 查看可用类型")
             sys.exit(1)
 
     print(BOLD(CYAN("━" * 60)))
-    print(BOLD(CYAN("  Card Game — terminal edition")))
+    print(BOLD(CYAN("  终端版牌局对战")))
     print(BOLD(CYAN("━" * 60)))
-    print(f"  Target score: {BOLD(str(args.target))}")
-    print(f"  You         : {GREEN('P0 (HUMAN)')}")
+    print(f"  目标分：{BOLD(str(args.target))}")
+    print(f"  你    ：{GREEN('P0（人类）')}")
     for i, n in enumerate(names, start=1):
-        print(f"  Opponent P{i}: {n}")
+        cn = OPP_NAME_CN.get(n, "")
+        print(f"  对手 P{i}：{n}  {DIM(cn)}")
     print()
-    print(DIM("  Rules: draw to build hand of distinct numbers (max 6 = SIX BURST +15)."))
-    print(DIM("         duplicate number = BUST (lose round score) unless you have insurance."))
-    print(DIM("         fold any time to lock your round score into total."))
-    print(DIM("         skill cards (insurance/exile/triple) trigger immediately."))
+    print(DIM("  规则：抽不重复的数字凑手牌，6 个不同 = 6翻了 (+15 分)"))
+    print(DIM("        重复数字 = 爆牌（除非有保险），跑路任意时刻锁定本局分"))
+    print(DIM("        加分牌：+10 / 翻倍当前数字总和"))
+    print(DIM("        技能牌：保险（免一次爆牌）/ 放逐（强制对手跑路）/ 三连（强制对手摸 3 张）"))
     print()
 
     cfg = GameConfig(num_players=4, target_score=args.target)
@@ -248,20 +335,19 @@ def main() -> None:
     engine = GameEngine(cfg, agents)
     winner = engine.play_match()
 
-    # final summary
     print()
-    print(BOLD(CYAN("━━━━━━━━━━━━━━━━ MATCH OVER ━━━━━━━━━━━━━━━━")))
+    print(BOLD(CYAN("━━━━━━━━━━━━━━━━ 比赛结束 ━━━━━━━━━━━━━━━━")))
     rank = sorted(engine.state.players, key=lambda p: -p.total_score)
     medals = ["🥇", "🥈", "🥉", "  "]
     for medal, p in zip(medals, rank):
-        you = BOLD(GREEN(" ★ YOU")) if p.index == 0 else ""
-        agent_name = "human" if p.index == 0 else names[p.index - 1]
-        print(f"  {medal}  P{p.index} ({agent_name}){you}: {BOLD(str(p.total_score))}")
+        you = BOLD(GREEN(" ★ 你")) if p.index == 0 else ""
+        agent_name = "你" if p.index == 0 else names[p.index - 1]
+        print(f"  {medal}  P{p.index}（{agent_name}）{you}：总分 {BOLD(str(p.total_score))}")
     print()
     if winner == 0:
-        print(BOLD(GREEN("  YOU WIN! 🎉")))
+        print(BOLD(GREEN("  恭喜，你赢了！🎉")))
     else:
-        print(BOLD(RED(f"  {names[winner - 1]} wins.")))
+        print(BOLD(RED(f"  {names[winner - 1]} 获胜。")))
 
 
 if __name__ == "__main__":

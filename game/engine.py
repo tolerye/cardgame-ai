@@ -257,7 +257,8 @@ class GameEngine:
 
     def _resolve_exile(self, idx: int) -> None:
         st = self.state
-        candidates = [p.index for p in st.others_active(idx)]
+        # spec says "any player" — self-exile is allowed (acts like a forced fold)
+        candidates = [p.index for p in st.players if p.is_active]
         if not candidates:
             st.add_log("EXILE wasted (no targets)")
             return
@@ -271,9 +272,9 @@ class GameEngine:
 
     def _resolve_triple(self, idx: int) -> None:
         st = self.state
-        candidates = [p.index for p in st.others_active(idx)]
+        # spec says "any player" — self-targeting is allowed (e.g. force a six-burst attempt)
+        candidates = [p.index for p in st.players if p.is_active]
         if not candidates:
-            # spec doesn't forbid self-targeting; we follow strict reading and waste it
             st.add_log("TRIPLE wasted (no targets)")
             return
         target = self.agents[idx].choose_skill_target(st, idx, CardKind.TRIPLE)
