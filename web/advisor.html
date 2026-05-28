@@ -230,9 +230,45 @@
         目标分 <input type="number" id="target-input" value="200" min="50" max="500" step="10" style="width:60px;font-size:13px;padding:3px 6px">
         <button id="undo-btn" class="undo-btn">↶ 撤销</button>
         <button id="reset-btn" class="undo-btn">↻ 重置</button>
-        <button id="next-round-btn" class="undo-btn">⤴ 进入下一局</button>
+        <button id="next-round-btn" class="undo-btn">⤴ 下一局</button>
+        <button id="hotkey-toggle" class="undo-btn">⌨ 快捷键</button>
+        <button id="ocr-toggle" class="undo-btn">📷 OCR</button>
       </div>
     </div>
+
+    <details id="hotkey-panel" class="card" style="margin-bottom:12px;font-size:13px" hidden>
+      <summary style="cursor:pointer;color:var(--text-dim)">快捷键说明（点击展开/收起）</summary>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-top:10px">
+        <div><b>0-9</b>　活跃玩家抽到 0-9</div>
+        <div><b>q / w / e</b>　抽到 10 / 11 / 12</div>
+        <div><b>Tab</b>　切到下一个活跃玩家</div>
+        <div><b>F</b>　跑路</div>
+        <div><b>B</b>　标记爆牌</div>
+        <div><b>D</b>　抽到翻倍 ×2</div>
+        <div><b>I</b>　抽到保险 🛡</div>
+        <div><b>X</b>　抽到放逐 🚷</div>
+        <div><b>R</b>　抽到三连 ⚡</div>
+        <div><b>Z / Cmd+Z</b>　撤销</div>
+      </div>
+    </details>
+
+    <!-- ============ OCR 截图识别 ============ -->
+    <details id="ocr-panel" class="card" style="margin-bottom:12px;font-size:13px" hidden>
+      <summary style="cursor:pointer;color:var(--text-dim)">📷 截图识别（实验性）— 点击粘贴截图测试 OCR 准确度</summary>
+      <div style="margin-top:10px">
+        <p style="color:var(--text-dim);margin-bottom:8px">
+          复制截图后在此页面 <b>Cmd+V (Mac) / Ctrl+V (Win)</b> 粘贴。或点下方区域选择文件。
+        </p>
+        <div id="ocr-drop"
+             style="border:2px dashed var(--border);border-radius:6px;padding:24px;text-align:center;cursor:pointer;color:var(--text-dim)">
+          📋 粘贴或点击选择截图
+          <input type="file" id="ocr-file" accept="image/*" style="display:none">
+        </div>
+        <div id="ocr-status" style="margin-top:10px;color:var(--text-dim);font-size:12px"></div>
+        <canvas id="ocr-canvas" style="max-width:100%;margin-top:10px;border-radius:4px;display:none"></canvas>
+        <div id="ocr-result" style="margin-top:10px;font-family:ui-monospace,monospace;font-size:13px"></div>
+      </div>
+    </details>
 
     <!-- 推荐区 -->
     <div id="reco" class="reco">
@@ -271,8 +307,20 @@
       <h4>📜 操作历史</h4>
       <div id="event-log"></div>
     </div>
+    <!-- ============ 技能目标选择模态框 ============ -->
+    <div id="skill-modal" class="modal" hidden style="z-index:80">
+      <div class="modal-content card" style="max-width:520px">
+        <h3 id="skill-modal-title" style="margin-bottom:8px"></h3>
+        <p id="skill-modal-desc" style="color:var(--text-dim);margin-bottom:14px;font-size:14px"></p>
+        <div id="skill-modal-targets"></div>
+        <div style="margin-top:14px;text-align:right">
+          <button id="skill-cancel" class="undo-btn">取消</button>
+        </div>
+      </div>
+    </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script type="module" src="js/advisor.js"></script>
 </body>
 </html>

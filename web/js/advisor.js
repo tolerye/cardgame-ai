@@ -13,7 +13,7 @@ import {
 import {
   GameConfig, GameState, PlayerState, PlayerStatus,
 } from './state.js';
-import { ExpectimaxAgent } from './agents.js';
+import { ExpectimaxAgent, EVAgent } from './agents.js';
 
 // ============================================================ 全局状态
 let state;            // GameState
@@ -143,7 +143,7 @@ function applyDraw(playerIdx, cardKind, cardValue = null) {
       if (candidates.length === 0) {
         addLog(`P${playerIdx} 重复保险且无可送对象，作废`, 'skill', playerIdx);
       } else {
-        promptTarget(candidates, '保险已被你拿过，必须转送给：', (target) => {
+        promptTarget(candidates, CardKind.INSURANCE, '保险已被你拿过，必须转送给：', (target) => {
           state.players[target].hasInsurance = true;
           addLog(`P${playerIdx}${meTag(playerIdx)} 强制送保险 → P${target}`, 'skill', playerIdx);
           afterAction();
@@ -158,7 +158,7 @@ function applyDraw(playerIdx, cardKind, cardValue = null) {
     if (candidates.length === 0) {
       addLog(`放逐作废（无目标）`, 'skill', playerIdx);
     } else {
-      promptTarget(candidates, `${meTag(playerIdx)} 抽到放逐牌，目标是：`, (target) => {
+      promptTarget(candidates, CardKind.EXILE, `${meTag(playerIdx)} 抽到放逐牌，目标是：`, (target) => {
         const victim = state.players[target];
         victim.lockedRoundScore = victim.handNumbers.reduce((s, v) => s + v, 0) + victim.bonusFlatTotal;
         victim.status = PlayerStatus.EXILED;
@@ -174,7 +174,7 @@ function applyDraw(playerIdx, cardKind, cardValue = null) {
     if (candidates.length === 0) {
       addLog(`三连作废（无目标）`, 'skill', playerIdx);
     } else {
-      promptTarget(candidates, `${meTag(playerIdx)} 抽到三连牌，目标是（连摸 3 张，请逐张点）：`, (target) => {
+      promptTarget(candidates, CardKind.TRIPLE, `${meTag(playerIdx)} 抽到三连牌，目标是（连摸 3 张，请逐张点）：`, (target) => {
         addLog(`P${playerIdx}${meTag(playerIdx)} 三连 → P${target}（接下来手动给 P${target} 点 3 张）`, 'skill', playerIdx);
         // 切换 active 到 target，让用户手动点 3 张
         activeIdx = target;
@@ -521,19 +521,269 @@ function warn(msg) {
 }
 
 // ============================================================ 模态选目标
-function promptTarget(candidates, msg, onPick) {
-  const choices = candidates.map(p => p.index === 0 ? '0 (你)' : `${p.index}`).join(' / ');
-  // 简单 prompt（可改为 modal）
-  const input = window.prompt(`${msg}\n选项: ${choices}\n输入玩家编号：`);
-  if (input === null) return;
-  const idx = parseInt(input.trim());
-  if (candidates.some(p => p.index === idx)) onPick(idx);
-  else { warn(`无效目标 ${input}`); render(); }
+function promptTarget(candidates, kind, msg, onPick) {
+  // 用 EVAgent 算推荐目标
+  let recommended = -1;
+  try {
+    recommended = new EVAgent().chooseSkillTarget(state, activeIdx, kind);
+  } catch (e) { console.error(e); }
+
+  const reasons = computeTargetReasons(candidates, kind, recommended);
+
+  const modal = document.getElementById('skill-modal');
+  document.getElementById('skill-modal-title').textContent = msg;
+
+  const KIND_DESC = {
+    [CardKind.EXILE]: '推荐选择本局已得最高的对手（夺其锁分）',
+    [CardKind.TRIPLE]: '推荐选手牌多+无保险的对手（爆牌概率高）；自己 5 张时优先冲 6 翻',
+    [CardKind.INSURANCE]: '保险只能送其他玩家。推荐送当前总分最低者（不喂强者）',
+  };
+  document.getElementById('skill-modal-desc').textContent = KIND_DESC[kind] || '';
+
+  const targetsDiv = document.getElementById('skill-modal-targets');
+  targetsDiv.innerHTML = '';
+  candidates.forEach(p => {
+    const isMe = p.index === activeIdx;
+    const isRec = p.index === recommended;
+    const ins = p.hasInsurance ? ' 🛡' : '';
+    const handStr = p.handNumbers.slice().sort((a, b) => a - b).join(',');
+    const cur = p.currentRoundScore();
+
+    const btn = document.createElement('div');
+    btn.className = 'skill-target' + (isMe ? ' is-self' : '');
+    btn.style.cssText = 'display:flex;justify-content:space-between;align-items:center;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin:6px 0;cursor:pointer;transition:all .12s';
+    if (isRec) {
+      btn.style.borderColor = 'var(--green)';
+      btn.style.background = 'rgba(63,185,80,.08)';
+    }
+    btn.onmouseover = () => { btn.style.transform = 'translateX(2px)'; };
+    btn.onmouseout = () => { btn.style.transform = ''; };
+
+    const recBadge = isRec
+      ? '<span style="background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;margin-left:8px">★ 推荐</span>'
+      : '';
+    const youMark = isMe ? '<span style="color:var(--green);margin-left:4px">(你)</span>' : '';
+
+    btn.innerHTML = `
+      <div>
+        <div><b>P${p.index}</b>${youMark}${recBadge}</div>
+        <div style="color:var(--text-dim);font-size:12px;margin-top:2px">总分 ${p.totalScore} · 本局 +${cur} · [${handStr || '-'}]${ins}</div>
+        <div style="color:var(--text-dim);font-size:11px;margin-top:2px;font-style:italic">${reasons[p.index] || ''}</div>
+      </div>
+      <span style="color:var(--text-dim);font-size:18px">›</span>
+    `;
+    btn.addEventListener('click', () => {
+      modal.hidden = true;
+      onPick(p.index);
+    });
+    targetsDiv.appendChild(btn);
+  });
+
+  modal.hidden = false;
+  document.getElementById('skill-cancel').onclick = () => {
+    modal.hidden = true;
+    // 取消 = 撤销刚才的抽牌（恢复牌库 + 状态）
+    undo();
+  };
+}
+
+function computeTargetReasons(candidates, kind, recommendedIdx) {
+  const reasons = {};
+  const total = Math.max(state.remaining.total(), 1);
+
+  candidates.forEach(p => {
+    const isMe = p.index === activeIdx;
+    const cur = p.currentRoundScore();
+    const handSet = p.uniqueNumbers;
+
+    if (kind === CardKind.EXILE) {
+      if (isMe) {
+        reasons[p.index] = cur > 0 ? `自我锁分 ${cur}（极少用）` : '自我锁分 0（无意义）';
+      } else {
+        reasons[p.index] = cur > 0 ? `夺走 ${cur} 分锁分` : '本局还没得分，浪费';
+      }
+    } else if (kind === CardKind.TRIPLE) {
+      if (isMe) {
+        if (handSet.size === 5) {
+          let safeC = 0;
+          for (let v = 0; v <= 12; v++) if (!handSet.has(v)) safeC += state.remaining.numbers[v];
+          const pSafe = (safeC / total * 100).toFixed(0);
+          reasons[p.index] = `5 张冲 6翻 (单张安全率 ${pSafe}%)`;
+        } else {
+          reasons[p.index] = `自己只 ${handSet.size} 张，不该选自己`;
+        }
+      } else {
+        let bustC = 0;
+        for (const v of handSet) bustC += state.remaining.numbers[v];
+        const p3Bust = 1 - Math.pow(1 - bustC / total, 3);
+        const note = p.hasInsurance ? ' (有保险)' : '';
+        reasons[p.index] = `3 抽爆牌 ${(p3Bust * 100).toFixed(0)}%${note}`;
+      }
+    } else if (kind === CardKind.INSURANCE) {
+      reasons[p.index] = `总分 ${p.totalScore}（送越弱越好）`;
+    }
+  });
+  return reasons;
+}
+
+// ============================================================ 快捷键
+function setupKeyboard() {
+  // 数字 0-9 + qwe = 10/11/12
+  const KEY_TO_NUM = {
+    '0': 0, '1': 1, '2': 2, '3': 3, '4': 4,
+    '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+    'q': 10, 'w': 11, 'e': 12,
+  };
+
+  document.addEventListener('keydown', (ev) => {
+    // 输入框聚焦时不拦截
+    if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;
+    if (ev.metaKey || ev.altKey) {
+      // Cmd+Z / Ctrl+Z 撤销
+      if (ev.key === 'z' || ev.key === 'Z') { ev.preventDefault(); undo(); }
+      return;
+    }
+    const k = ev.key.toLowerCase();
+
+    if (k in KEY_TO_NUM) {
+      ev.preventDefault();
+      const v = KEY_TO_NUM[k];
+      if (state.remaining.numbers[v] > 0 && state.players[activeIdx].isActive) {
+        applyDraw(activeIdx, CardKind.NUMBER, v);
+      } else {
+        flashErr();
+      }
+      return;
+    }
+
+    if (k === 'tab') {
+      // tab 已被默认行为占用，用其他键
+    }
+
+    switch (k) {
+      case 'f': ev.preventDefault(); fold(activeIdx); break;
+      case 'z': ev.preventDefault(); undo(); break;
+      case 'b': ev.preventDefault(); bust(activeIdx); break;
+      case 't': ev.preventDefault(); nextActive(); break;  // t = next player
+      case 'i': ev.preventDefault();
+        if (state.remaining.insurance > 0) applyDraw(activeIdx, CardKind.INSURANCE);
+        break;
+      case 'x': ev.preventDefault();
+        if (state.remaining.exile > 0) applyDraw(activeIdx, CardKind.EXILE);
+        break;
+      case 'r': ev.preventDefault();
+        if (state.remaining.triple > 0) applyDraw(activeIdx, CardKind.TRIPLE);
+        break;
+      case 'd': ev.preventDefault();
+        if (state.remaining.bonus_double > 0) applyDraw(activeIdx, CardKind.BONUS_DOUBLE);
+        break;
+    }
+  });
+
+  // Tab 单独处理（preventDefault 避免焦点跳走）
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Tab' && ev.target.tagName !== 'INPUT') {
+      ev.preventDefault();
+      nextActive();
+    }
+  });
+}
+
+function nextActive() {
+  for (let off = 1; off <= NUM_PLAYERS; off++) {
+    const nxt = (activeIdx + off) % NUM_PLAYERS;
+    if (state.players[nxt].isActive) {
+      activeIdx = nxt;
+      render();
+      return;
+    }
+  }
+}
+
+function flashErr() {
+  // 简单视觉提示
+  const reco = document.getElementById('reco');
+  reco.style.transition = 'none';
+  reco.style.borderColor = 'var(--red)';
+  setTimeout(() => { reco.style.transition = ''; reco.style.borderColor = ''; }, 200);
+}
+
+// ============================================================ OCR 起步版
+function setupOCR() {
+  const drop = document.getElementById('ocr-drop');
+  const fileInput = document.getElementById('ocr-file');
+  const status = document.getElementById('ocr-status');
+  const canvas = document.getElementById('ocr-canvas');
+  const result = document.getElementById('ocr-result');
+  if (!drop) return;
+
+  drop.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) processImage(e.target.files[0]);
+  });
+  document.addEventListener('paste', (e) => {
+    const ocrPanel = document.getElementById('ocr-panel');
+    if (!ocrPanel || ocrPanel.hidden) return;  // OCR 面板没展开就不拦截 paste
+    const items = e.clipboardData?.items || [];
+    for (const item of items) {
+      if (item.type && item.type.startsWith('image/')) {
+        e.preventDefault();
+        processImage(item.getAsFile());
+        return;
+      }
+    }
+  });
+
+  async function processImage(file) {
+    status.textContent = '加载图片...';
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = async () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      canvas.style.display = 'block';
+
+      const T = window.Tesseract;
+      if (!T) {
+        status.textContent = '❌ Tesseract.js 未加载，刷新页面重试';
+        return;
+      }
+      status.textContent = '🔍 OCR 识别中...（首次需下载语言包约 3MB，请稍等）';
+      try {
+        const t0 = Date.now();
+        const { data } = await T.recognize(canvas, 'eng');
+        const dt = ((Date.now() - t0) / 1000).toFixed(1);
+        const numbers = (data.text.match(/\d+/g) || []).map(Number);
+        status.textContent = `✓ 完成（${dt}s，识别 ${numbers.length} 个数字 token）`;
+        result.innerHTML = `
+          <div style="color:var(--text-dim);margin-bottom:6px">识别到的数字：</div>
+          <div style="background:var(--panel-2);padding:8px;border-radius:4px;font-family:ui-monospace,monospace">
+            ${numbers.length ? numbers.join(', ') : '(无)'}
+          </div>
+          <details style="margin-top:8px">
+            <summary style="color:var(--text-dim);cursor:pointer;font-size:12px">原始 OCR 文本</summary>
+            <pre style="background:var(--panel-2);padding:8px;border-radius:4px;white-space:pre-wrap;font-size:11px;margin-top:6px">${data.text.trim()}</pre>
+          </details>
+          <div style="color:var(--text-dim);margin-top:10px;font-size:11px;line-height:1.5">
+            💡 这只是 OCR 起步版本，输出原始数字。<br>
+            想自动填入状态？请提供一张游戏截图给我看 UI 布局，我可以加上"手牌区/分数区"等区域标定，识别后自动填。
+          </div>
+        `;
+      } catch (e) {
+        status.textContent = '❌ ' + e.message;
+        console.error(e);
+      }
+    };
+    img.src = url;
+  }
 }
 
 // ============================================================ 入口
 document.addEventListener('DOMContentLoaded', () => {
   reset();
+  setupKeyboard();
+  setupOCR();
   document.getElementById('action-fold').addEventListener('click', () => fold(activeIdx));
   document.getElementById('action-bust').addEventListener('click', () => bust(activeIdx));
   document.getElementById('undo-btn').addEventListener('click', undo);
@@ -541,6 +791,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (confirm('确定重置所有状态（包括总分）？')) reset(false);
   });
   document.getElementById('next-round-btn').addEventListener('click', nextRound);
+  const hotkeyBtn = document.getElementById('hotkey-toggle');
+  if (hotkeyBtn) hotkeyBtn.addEventListener('click', () => {
+    const panel = document.getElementById('hotkey-panel');
+    panel.hidden = !panel.hidden;
+  });
+  const ocrBtn = document.getElementById('ocr-toggle');
+  if (ocrBtn) ocrBtn.addEventListener('click', () => {
+    const panel = document.getElementById('ocr-panel');
+    panel.hidden = !panel.hidden;
+  });
   document.getElementById('target-input').addEventListener('change', () => {
     state.config.targetScore = parseInt(document.getElementById('target-input').value) || 200;
     render();
