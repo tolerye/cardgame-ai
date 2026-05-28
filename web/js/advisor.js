@@ -709,6 +709,8 @@ function flashErr() {
 }
 
 // ============================================================ OCR 起步版
+let _screenStream = null;
+
 function setupOCR() {
   const drop = document.getElementById('ocr-drop');
   const fileInput = document.getElementById('ocr-file');
@@ -717,13 +719,68 @@ function setupOCR() {
   const result = document.getElementById('ocr-result');
   if (!drop) return;
 
+  // 屏幕共享按钮
+  const screenBtn = document.getElementById('ocr-screen-btn');
+  const captureBtn = document.getElementById('ocr-capture-btn');
+  const stopBtn = document.getElementById('ocr-stop-btn');
+  const video = document.getElementById('ocr-video');
+  const screenStatus = document.getElementById('ocr-screen-status');
+
+  if (screenBtn) {
+    screenBtn.addEventListener('click', async () => {
+      try {
+        screenStatus.textContent = '请求授权...';
+        _screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 5 }, audio: false,
+        });
+        video.srcObject = _screenStream;
+        await video.play();
+        video.style.display = 'block';
+        screenBtn.hidden = true;
+        captureBtn.hidden = false;
+        stopBtn.hidden = false;
+        screenStatus.textContent = `✓ 共享中 ${video.videoWidth}×${video.videoHeight}`;
+        // 用户在浏览器里"停止共享"时清理
+        _screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
+      } catch (e) {
+        screenStatus.textContent = '❌ ' + e.message;
+        console.error(e);
+      }
+    });
+
+    captureBtn.addEventListener('click', () => {
+      if (!_screenStream) return;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      canvas.style.display = 'block';
+      runOCR(canvas);
+    });
+
+    stopBtn.addEventListener('click', stopScreenShare);
+  }
+
+  function stopScreenShare() {
+    if (_screenStream) {
+      _screenStream.getTracks().forEach(t => t.stop());
+      _screenStream = null;
+    }
+    video.srcObject = null;
+    video.style.display = 'none';
+    if (screenBtn) screenBtn.hidden = false;
+    if (captureBtn) captureBtn.hidden = true;
+    if (stopBtn) stopBtn.hidden = true;
+    if (screenStatus) screenStatus.textContent = '';
+  }
+
+  // paste / 文件上传
   drop.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', (e) => {
     if (e.target.files[0]) processImage(e.target.files[0]);
   });
   document.addEventListener('paste', (e) => {
     const ocrPanel = document.getElementById('ocr-panel');
-    if (!ocrPanel || ocrPanel.hidden) return;  // OCR 面板没展开就不拦截 paste
+    if (!ocrPanel || ocrPanel.hidden) return;
     const items = e.clipboardData?.items || [];
     for (const item of items) {
       if (item.type && item.type.startsWith('image/')) {
@@ -743,39 +800,41 @@ function setupOCR() {
       canvas.height = img.naturalHeight;
       canvas.getContext('2d').drawImage(img, 0, 0);
       canvas.style.display = 'block';
-
-      const T = window.Tesseract;
-      if (!T) {
-        status.textContent = '❌ Tesseract.js 未加载，刷新页面重试';
-        return;
-      }
-      status.textContent = '🔍 OCR 识别中...（首次需下载语言包约 3MB，请稍等）';
-      try {
-        const t0 = Date.now();
-        const { data } = await T.recognize(canvas, 'eng');
-        const dt = ((Date.now() - t0) / 1000).toFixed(1);
-        const numbers = (data.text.match(/\d+/g) || []).map(Number);
-        status.textContent = `✓ 完成（${dt}s，识别 ${numbers.length} 个数字 token）`;
-        result.innerHTML = `
-          <div style="color:var(--text-dim);margin-bottom:6px">识别到的数字：</div>
-          <div style="background:var(--panel-2);padding:8px;border-radius:4px;font-family:ui-monospace,monospace">
-            ${numbers.length ? numbers.join(', ') : '(无)'}
-          </div>
-          <details style="margin-top:8px">
-            <summary style="color:var(--text-dim);cursor:pointer;font-size:12px">原始 OCR 文本</summary>
-            <pre style="background:var(--panel-2);padding:8px;border-radius:4px;white-space:pre-wrap;font-size:11px;margin-top:6px">${data.text.trim()}</pre>
-          </details>
-          <div style="color:var(--text-dim);margin-top:10px;font-size:11px;line-height:1.5">
-            💡 这只是 OCR 起步版本，输出原始数字。<br>
-            想自动填入状态？请提供一张游戏截图给我看 UI 布局，我可以加上"手牌区/分数区"等区域标定，识别后自动填。
-          </div>
-        `;
-      } catch (e) {
-        status.textContent = '❌ ' + e.message;
-        console.error(e);
-      }
+      runOCR(canvas);
     };
     img.src = url;
+  }
+
+  async function runOCR(srcCanvas) {
+    const T = window.Tesseract;
+    if (!T) {
+      status.textContent = '❌ Tesseract.js 未加载，刷新页面重试';
+      return;
+    }
+    status.textContent = '🔍 OCR 识别中...（首次需下载语言包约 3MB）';
+    try {
+      const t0 = Date.now();
+      const { data } = await T.recognize(srcCanvas, 'eng');
+      const dt = ((Date.now() - t0) / 1000).toFixed(1);
+      const numbers = (data.text.match(/\d+/g) || []).map(Number);
+      status.textContent = `✓ 完成（${dt}s，识别 ${numbers.length} 个数字 token）`;
+      result.innerHTML = `
+        <div style="color:var(--text-dim);margin-bottom:6px">识别到的数字：</div>
+        <div style="background:var(--panel-2);padding:8px;border-radius:4px;font-family:ui-monospace,monospace">
+          ${numbers.length ? numbers.join(', ') : '(无)'}
+        </div>
+        <details style="margin-top:8px">
+          <summary style="color:var(--text-dim);cursor:pointer;font-size:12px">原始 OCR 文本</summary>
+          <pre style="background:var(--panel-2);padding:8px;border-radius:4px;white-space:pre-wrap;font-size:11px;margin-top:6px">${data.text.trim()}</pre>
+        </details>
+        <div style="color:var(--text-dim);margin-top:10px;font-size:11px;line-height:1.5">
+          💡 起步版本：原始数字。下一步：把游戏 UI 上的 <b>玩家面板</b>（左上）裁剪出来单独识别 → 自动填状态。
+        </div>
+      `;
+    } catch (e) {
+      status.textContent = '❌ ' + e.message;
+      console.error(e);
+    }
   }
 }
 

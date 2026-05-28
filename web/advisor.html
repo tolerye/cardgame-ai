@@ -254,10 +254,20 @@
 
     <!-- ============ OCR 截图识别 ============ -->
     <details id="ocr-panel" class="card" style="margin-bottom:12px;font-size:13px" hidden>
-      <summary style="cursor:pointer;color:var(--text-dim)">📷 截图识别（实验性）— 点击粘贴截图测试 OCR 准确度</summary>
+      <summary style="cursor:pointer;color:var(--text-dim)">📷 截图识别（实验性）— 三种输入方式</summary>
       <div style="margin-top:10px">
-        <p style="color:var(--text-dim);margin-bottom:8px">
-          复制截图后在此页面 <b>Cmd+V (Mac) / Ctrl+V (Win)</b> 粘贴。或点下方区域选择文件。
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <button id="ocr-screen-btn" class="primary" style="font-size:13px">🖥 开启屏幕共享</button>
+          <button id="ocr-capture-btn" class="undo-btn" style="font-size:13px" hidden>📸 识别当前帧</button>
+          <button id="ocr-stop-btn" class="undo-btn" style="font-size:13px" hidden>⏹ 停止共享</button>
+          <span id="ocr-screen-status" style="color:var(--text-dim);align-self:center"></span>
+        </div>
+
+        <video id="ocr-video" autoplay playsinline muted
+               style="max-width:100%;border-radius:6px;display:none;background:var(--panel-2)"></video>
+
+        <p style="color:var(--text-dim);margin:8px 0">
+          或：复制截图后 <b>Cmd+V</b> 粘贴 / 点下方区域选文件。
         </p>
         <div id="ocr-drop"
              style="border:2px dashed var(--border);border-radius:6px;padding:24px;text-align:center;cursor:pointer;color:var(--text-dim)">
