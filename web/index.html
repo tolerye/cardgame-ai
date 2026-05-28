@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>牌局对战 · Web 版</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- ===== 开局界面 ===== -->
+    <section id="setup" class="card">
+      <h1>🎲 牌局对战</h1>
+      <p class="subtitle">规则：抽不重复的数字凑手牌。6 张不同 = 6 翻 +15 分。重复 = 爆牌。可随时跑路锁定本局得分。</p>
+
+      <div class="setup-form">
+        <label>
+          目标分
+          <input type="number" id="target-input" value="200" min="50" max="500" step="10">
+        </label>
+        <label>
+          对手 1
+          <select class="opp-select" data-idx="1">
+            <option value="expectimax" selected>Expectimax（最强 40%）</option>
+            <option value="ev">EV 启发式（35%）</option>
+            <option value="greedy">Greedy 阈值贪心</option>
+            <option value="random">Random 随机</option>
+          </select>
+        </label>
+        <label>
+          对手 2
+          <select class="opp-select" data-idx="2">
+            <option value="ev" selected>EV 启发式（35%）</option>
+            <option value="expectimax">Expectimax（最强 40%）</option>
+            <option value="greedy">Greedy 阈值贪心</option>
+            <option value="random">Random 随机</option>
+          </select>
+        </label>
+        <label>
+          对手 3
+          <select class="opp-select" data-idx="3">
+            <option value="greedy" selected>Greedy 阈值贪心</option>
+            <option value="expectimax">Expectimax（最强 40%）</option>
+            <option value="ev">EV 启发式（35%）</option>
+            <option value="random">Random 随机</option>
+          </select>
+        </label>
+
+        <button id="start-btn" class="primary">开始游戏</button>
+      </div>
+
+      <details class="rules">
+        <summary>详细规则</summary>
+        <ul>
+          <li><b>牌库 94 张</b>：数字 79 + 加分 6（3 张 +10 / 3 张翻倍当前数字总和）+ 技能 9（保险/放逐/三连各 3）</li>
+          <li><b>爆牌</b>：抽到手中已有的数字（除非有保险，消耗保险免一次）</li>
+          <li><b>6 翻了</b>：手牌凑齐 6 个不同数字，+15 分奖励 + 强制其他活跃玩家锁分</li>
+          <li><b>放逐</b>：强制目标跑路（可选自己）</li>
+          <li><b>三连</b>：目标连摸 3 张（可选自己冲 6 翻）</li>
+          <li><b>跑路</b>：锁定本局得分加到总分，退出本局</li>
+          <li>任何玩家总分 ≥ 目标分，比赛结束</li>
+        </ul>
+      </details>
+    </section>
+
+    <!-- ===== 对局界面 ===== -->
+    <section id="game" hidden>
+      <header class="game-header">
+        <h2>第 <span id="round-num">1</span> 局</h2>
+        <div class="meta">
+          目标 <b id="target-display">200</b> ·
+          剩余 <b id="deck-remaining">94</b> 张
+        </div>
+        <button id="quit-btn" class="secondary">放弃</button>
+      </header>
+
+      <div class="players-grid" id="players"></div>
+
+      <div class="my-area card">
+        <div class="my-header">
+          <h3>★ 我的状态</h3>
+          <div class="my-meta">
+            <span>本局 <b id="my-cur-score">0</b></span>
+            <span>保险 <b id="my-insurance">无</b></span>
+          </div>
+        </div>
+        <div class="my-hand" id="my-hand"></div>
+        <div class="hint" id="hint"></div>
+        <div class="actions">
+          <button id="btn-draw" class="primary big">摸牌 (D)</button>
+          <button id="btn-fold" class="secondary big">跑路 (F)</button>
+        </div>
+      </div>
+
+      <div class="log-area card">
+        <h3>📜 本局事件</h3>
+        <ul id="event-log" class="event-log"></ul>
+      </div>
+    </section>
+
+    <!-- ===== 技能目标选择模态框 ===== -->
+    <div id="skill-modal" class="modal" hidden>
+      <div class="modal-content card">
+        <h3 id="skill-title"></h3>
+        <p id="skill-desc"></p>
+        <div id="skill-targets"></div>
+      </div>
+    </div>
+
+    <!-- ===== 抽到牌的弹出反馈 ===== -->
+    <div id="drawn-card" class="drawn-card" hidden></div>
+
+    <!-- ===== 比赛结束模态框 ===== -->
+    <div id="result-modal" class="modal" hidden>
+      <div class="modal-content card">
+        <h2 id="result-title"></h2>
+        <ol id="result-rank" class="rank"></ol>
+        <button id="play-again" class="primary">再来一局</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

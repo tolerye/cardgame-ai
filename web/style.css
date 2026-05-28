@@ -1,0 +1,454 @@
+/* ============== 全局 ============== */
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #1c2128;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --magenta: #bc8cff;
+  --blue: #79c0ff;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+#app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+/* ============== 通用组件 ============== */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+button {
+  font: inherit;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: all .12s ease;
+}
+
+button:hover {
+  background: #30363d;
+  border-color: #484f58;
+}
+
+button:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: #238636;
+  border-color: #2ea043;
+  color: white;
+  font-weight: 600;
+}
+
+button.primary:hover {
+  background: #2ea043;
+}
+
+button.secondary {
+  background: #21262d;
+}
+
+button.big {
+  font-size: 16px;
+  padding: 12px 24px;
+  min-width: 130px;
+}
+
+input, select {
+  font: inherit;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+/* ============== 开局界面 ============== */
+#setup h1 {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  color: var(--text-dim);
+  margin-bottom: 24px;
+}
+
+.setup-form {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.setup-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.setup-form button {
+  grid-column: 1 / -1;
+}
+
+.rules {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.rules summary {
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 8px;
+}
+
+.rules ul {
+  list-style: none;
+  margin-top: 8px;
+}
+
+.rules li {
+  padding: 4px 0;
+}
+
+.rules b {
+  color: var(--text);
+}
+
+/* ============== 对局界面 ============== */
+.game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.game-header h2 {
+  font-size: 20px;
+}
+
+.meta {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.meta b {
+  color: var(--text);
+  margin: 0 2px;
+}
+
+/* ============== 玩家网格 ============== */
+.players-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.player-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 14px;
+}
+
+.player-card.is-me {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, rgba(88, 166, 255, .08), transparent);
+}
+
+.player-card .name {
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.player-card .status-emoji {
+  font-size: 18px;
+}
+
+.player-card .total {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 4px 0;
+}
+
+.score-bar {
+  height: 4px;
+  background: var(--panel-2);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.score-bar-fill {
+  height: 100%;
+  background: var(--green);
+  transition: width .3s ease;
+}
+
+.player-card .info {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 2px 0;
+}
+
+.player-card .hand {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 12px;
+  color: var(--blue);
+}
+
+.player-card.status-folded { opacity: .55; }
+.player-card.status-busted { opacity: .55; }
+.player-card.status-busted .total { color: var(--red); }
+.player-card.status-exiled { opacity: .55; }
+
+/* ============== 我的状态区 ============== */
+.my-area {
+  background: var(--panel);
+}
+
+.my-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.my-meta {
+  display: flex;
+  gap: 16px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.my-meta b {
+  color: var(--text);
+  margin-left: 4px;
+}
+
+.my-hand {
+  display: flex;
+  gap: 8px;
+  min-height: 70px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.card-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 64px;
+  background: linear-gradient(135deg, #21262d, #161b22);
+  border: 1.5px solid var(--accent);
+  border-radius: 6px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  font-family: ui-monospace, "SF Mono", monospace;
+  animation: card-pop .25s ease-out;
+}
+
+.card-tile.bonus {
+  border-color: var(--green);
+  color: var(--green);
+  font-size: 14px;
+}
+
+@keyframes card-pop {
+  0% { transform: scale(0.7); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.hint {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border-radius: 6px;
+}
+
+.hint .danger { color: var(--red); font-weight: 600; }
+.hint .warn { color: var(--yellow); font-weight: 600; }
+.hint .safe { color: var(--green); font-weight: 600; }
+.hint .winning { color: var(--green); font-weight: 700; }
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* ============== 事件日志 ============== */
+.log-area h3 {
+  font-size: 16px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.event-log {
+  list-style: none;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 13px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.event-log li {
+  padding: 3px 0;
+  color: var(--text-dim);
+}
+
+.event-log li.is-me { color: var(--text); font-weight: 600; }
+.event-log li.bust { color: var(--red); }
+.event-log li.six-burst { color: var(--yellow); font-weight: 700; }
+.event-log li.bonus { color: var(--green); }
+.event-log li.skill { color: var(--magenta); }
+.event-log li.insurance-event { color: var(--blue); }
+.event-log li.fold { opacity: .65; }
+
+/* ============== 抽到牌弹出 ============== */
+.drawn-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--panel);
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  padding: 32px 48px;
+  font-size: 48px;
+  font-weight: 700;
+  color: var(--accent);
+  box-shadow: 0 8px 32px rgba(88, 166, 255, .35);
+  z-index: 100;
+  animation: drawn-pop .8s ease-out;
+}
+
+.drawn-card.bonus { border-color: var(--green); color: var(--green); }
+.drawn-card.skill { border-color: var(--magenta); color: var(--magenta); }
+.drawn-card.bust { border-color: var(--red); color: var(--red); }
+
+@keyframes drawn-pop {
+  0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+  20% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+  80% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}
+
+/* ============== 模态框 ============== */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(2px);
+}
+
+.modal-content {
+  max-width: 480px;
+  width: 90%;
+  margin: 0;
+}
+
+.modal-content h2 {
+  margin-bottom: 16px;
+}
+
+.skill-target {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 6px 0;
+  cursor: pointer;
+  transition: all .12s ease;
+}
+
+.skill-target:hover {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, .08);
+}
+
+.skill-target.is-self {
+  border-color: var(--green);
+}
+
+.rank {
+  list-style: none;
+  margin: 16px 0;
+}
+
+.rank li {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rank li.is-me {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ============== 响应式 ============== */
+@media (max-width: 720px) {
+  .players-grid { grid-template-columns: repeat(2, 1fr); }
+  .setup-form { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .actions { flex-direction: column; }
+  .actions button { width: 100%; }
+}
