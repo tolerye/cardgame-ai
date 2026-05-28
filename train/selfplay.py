@@ -157,9 +157,17 @@ def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
     cfg = GameConfig(num_players=num_players)
     if use_batched:
         from agents.batched_mcts import BatchedNeuralMCTSAgent
+        # AlphaZero-style exploration during self-play: dirichlet noise at root,
+        # temperature=1 for visit-count sampling, plus hybrid leaf eval that
+        # blends NN value with handcrafted EV signal — the EV teacher accelerates
+        # value-head bootstrapping in the small-data regime.
         agents = [BatchedNeuralMCTSAgent(model=model,
                                           n_simulations=n_simulations,
-                                          batch_size=batch_size)
+                                          batch_size=batch_size,
+                                          dirichlet_eps=0.25,
+                                          dirichlet_alpha=0.5,
+                                          temperature=1.0,
+                                          hybrid_alpha=0.5)
                    for _ in range(num_players)]
     else:
         agents = [NeuralMCTSAgent(model=model, n_simulations=n_simulations,
@@ -183,10 +191,25 @@ def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
     engine._take_turn = recording_take  # monkey-patch
     engine.play_match()
     winner = engine.state.winner
+    # Placement-based value target (Petosa & Balch, Multiplayer AlphaZero):
+    # 1st → +1, 2nd → +1/3, 3rd → −1/3, 4th → −1.
+    # Lower variance than binary winner-takes-all and gives a learnable signal
+    # to all 4 players, not just the winner.
+    final_totals = [p.total_score for p in engine.state.players]
+    rank = sorted(range(num_players), key=lambda i: -final_totals[i])  # idx by desc score
+    placement_z = [0.0] * num_players
+    # Asymmetric placement: only 1st place is "good", everyone else is bad.
+    # Rationale: the game is winner-takes-all (target_score 200), so optimizing
+    # for "avoid last place" (symmetric +1/+1/3/-1/3/-1) trains agents to fold
+    # for safety, never reaching the target. Asymmetric reward keeps lower
+    # variance than binary ±1 while pointing the value head at the right goal.
+    placement_values = [1.0, -1/3, -2/3, -1.0]
+    for pos, idx in enumerate(rank):
+        placement_z[idx] = placement_values[pos] if pos < 4 else -1.0
     examples: List[TrainingExample] = []
     for x, pi, idx in pending:
-        z = 1.0 if idx == winner else -1.0
-        examples.append(TrainingExample(features=x, policy=pi, value=z))
+        examples.append(TrainingExample(features=x, policy=pi,
+                                          value=placement_z[idx]))
     return examples
 
 

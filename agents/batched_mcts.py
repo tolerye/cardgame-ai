@@ -45,13 +45,25 @@ class BatchedNeuralMCTSAgent(BaseAgent):
         c_puct: float = 1.5,
         device: str = "cpu",
         seed: Optional[int] = None,
+        dirichlet_eps: float = 0.0,
+        dirichlet_alpha: float = 0.5,
+        temperature: float = 0.0,
+        hybrid_alpha: float = 1.0,
     ) -> None:
+        """hybrid_alpha: weight on NN value head when computing leaf value.
+            1.0 = pure NN (default), 0.0 = pure handcrafted EV signal.
+            Use < 1 early in training when NN value head is unreliable."""
         self.model = model
         self.n_sims = n_simulations
         self.batch_size = batch_size
         self.c_puct = c_puct
         self.device = device
+        self.dirichlet_eps = dirichlet_eps
+        self.dirichlet_alpha = dirichlet_alpha
+        self.temperature = temperature
+        self.hybrid_alpha = hybrid_alpha
         self.rng = random.Random(seed)
+        self._np_rng = np.random.default_rng(seed)
         self._last_visits: Optional[np.ndarray] = None
 
     # ---------------------------------------------------------------- public
@@ -67,6 +79,10 @@ class BatchedNeuralMCTSAgent(BaseAgent):
         # If no model, use uniform prior (still benefits from search)
         if self.model is None:
             prior = np.array([0.5, 0.5], dtype=np.float32)
+        # Dirichlet exploration noise at root (AlphaZero recipe; only for self-play)
+        if self.dirichlet_eps > 0:
+            noise = self._np_rng.dirichlet([self.dirichlet_alpha, self.dirichlet_alpha])
+            prior = (1 - self.dirichlet_eps) * prior + self.dirichlet_eps * noise
 
         N = np.zeros(2, dtype=np.float32)
         W = np.zeros(2, dtype=np.float32)
@@ -98,8 +114,15 @@ class BatchedNeuralMCTSAgent(BaseAgent):
 
             n_done += this_batch
 
-        # Visit counts as policy (for training); pick best for play
+        # Visit counts as policy (for training); pick best for play.
+        # In self-play with temperature>0, sample by visit distribution to add diversity.
         self._last_visits = N / max(N.sum(), 1)
+        if self.temperature > 0 and N.sum() > 0:
+            # T=1: sample proportional to visits; T<1: sharpened; T>1: flatter
+            scaled = N ** (1.0 / self.temperature)
+            probs = scaled / scaled.sum()
+            choice = int(self._np_rng.choice(2, p=probs))
+            return ["draw", "fold"][choice]
         return ["draw", "fold"][int(np.argmax(N))]
 
     def choose_skill_target(self, state, my_idx, kind):
@@ -126,21 +149,31 @@ class BatchedNeuralMCTSAgent(BaseAgent):
         return p
 
     def _infer_values_batched(self, states: List[Tuple[GameState, int]]) -> np.ndarray:
-        if self.model is None:
-            # Fallback: use score-margin proxy
-            out = np.zeros(len(states), dtype=np.float32)
-            for i, (s, idx) in enumerate(states):
-                me = s.players[idx].total_score + s.players[idx].current_round_score()
-                others = max(p.total_score + p.current_round_score()
+        # Handcrafted score-margin signal — same shape as a placement value
+        # (range [-1, 1]). Cheap, no network needed. Used as a teacher signal.
+        ev_signal = np.zeros(len(states), dtype=np.float32)
+        target = states[0][0].config.target_score if states else 200
+        for i, (s, idx) in enumerate(states):
+            me = s.players[idx]
+            my_total = me.total_score + me.current_round_score()
+            others_max = max(p.total_score + p.current_round_score()
                              for p in s.players if p.index != idx)
-                out[i] = max(-1.0, min(1.0, (me - others) / s.config.target_score))
-            return out
+            margin = (my_total - others_max) / target
+            ev_signal[i] = max(-1.0, min(1.0, margin * 2))  # scale so margin=0.5 → 1.0
+
+        if self.model is None or self.hybrid_alpha == 0.0:
+            return ev_signal
+
         import torch
         x = np.stack([encode_state(s, idx) for s, idx in states])
         with torch.no_grad():
             X = torch.from_numpy(x).to(self.device)
             _, v = self.model(X)
-            return v.cpu().numpy()
+            nn_values = v.cpu().numpy()
+
+        if self.hybrid_alpha >= 1.0:
+            return nn_values
+        return self.hybrid_alpha * nn_values + (1 - self.hybrid_alpha) * ev_signal
 
     # ------------------------------------------------------------ simulator
     def _simulate_to_frontier(self, state: GameState, my_idx: int, action: str) -> GameState:

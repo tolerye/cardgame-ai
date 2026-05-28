@@ -29,8 +29,12 @@ class NeuralAgent(BaseAgent):
         self.n_sims = n_simulations
         self._mcts_agent = None
         if use_mcts:
-            from train.selfplay import NeuralMCTSAgent
-            self._mcts_agent = NeuralMCTSAgent(model=self.model, n_simulations=n_simulations)
+            from agents.batched_mcts import BatchedNeuralMCTSAgent
+            # Inference: blend 70% NN + 30% handcrafted EV in leaf evaluation
+            # to steady the search until the value head is well-trained.
+            self._mcts_agent = BatchedNeuralMCTSAgent(
+                model=self.model, n_simulations=n_simulations, batch_size=32,
+                hybrid_alpha=0.7)
 
     def choose_action(self, state: GameState, my_idx: int) -> str:
         me = state.players[my_idx]

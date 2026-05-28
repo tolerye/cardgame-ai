@@ -76,6 +76,19 @@ python3 -m train.selfplay --iters 30 --games-per-iter 8 --n-sims 60
 
 均匀基线 25%；Expectimax 相对提升 **+62%**。
 
+## NN 路径实验结果
+
+完整训练日志见 [`NN_JOURNEY.md`](./NN_JOURNEY.md)。简要：
+
+| 模型 | raw policy 胜率 | batched MCTS 胜率 | 决策延迟 | 用途 |
+|---|---|---|---|---|
+| **v1** (expectimax rollout, 360 game) | 21.5% | **30.0%** | 5ms (MCTS) | MCTS 历史最强 |
+| **v5** (不对称 placement, +1800 game) | **21.5%** | 21.5% | **0.05ms (raw)** | 超低延迟首选 |
+
+**重要发现**：在这种小状态空间游戏里，NN-MCTS 不会反超 expectimax（理论上限 ~45%，需百万级 game 训练）。NN 路径的真实价值在 **raw policy 速度比 MCTS 快 1000×**，21.5% 胜率仍是 random 的 86 倍。
+
+含完整 batched MCTS 实现（virtual loss + 批量 leaf eval，比传统 MCTS 快 54×）、value head 诊断脚本、placement reward 修复、hybrid leaf eval 等所有 AlphaZero 工程细节。
+
 ## 进一步提升方向
 
 1. **Expectimax 调优**：把 `INSURANCE_GAIN_VALUE` / `EXILE_DRAW_VALUE` 等常数用网格搜索校准
