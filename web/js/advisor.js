@@ -840,11 +840,9 @@ function setupOCR() {
       return;
     }
 
-    // 针对此游戏 UI：玩家面板在左上角约 (0~45% 宽, 0~32% 高) 区域
-    // 先裁剪 + 2x 放大 + 用 worker 限定字符集
-    const cropped = cropAndScale(srcCanvas, 0, 0, 0.45, 0.32, 2);
+    // 玩家面板大约在左上 0~40% 宽 × 7%~62% 高（覆盖表头到第 4 行）
+    const cropped = cropAndScale(srcCanvas, 0, 0.07, 0.4, 0.55, 2);
 
-    // 显示裁剪结果（让用户确认裁对了）
     let preview = document.getElementById('ocr-cropped-preview');
     if (!preview) {
       preview = document.createElement('canvas');
@@ -857,42 +855,111 @@ function setupOCR() {
     preview.getContext('2d').drawImage(cropped, 0, 0);
     preview.style.display = 'block';
 
-    status.textContent = '🔍 OCR 识别玩家面板（数字 only，2x 放大）...';
+    status.textContent = '🔍 OCR 玩家面板（按行解析）...';
     try {
       const t0 = Date.now();
       const worker = await getOCRWorker();
       const { data } = await worker.recognize(cropped);
       const dt = ((Date.now() - t0) / 1000).toFixed(1);
-      const numbers = (data.text.match(/\d+/g) || []).map(Number);
-      status.textContent = `✓ 完成（${dt}s，识别 ${numbers.length} 个数字）`;
 
-      // 同时跑一次全图（不裁剪）作对比
+      // 按行解析
+      const rows = (data.lines || [])
+        .map(l => ({
+          y: l.bbox?.y0 ?? 0,
+          text: (l.text || '').trim(),
+          nums: ((l.text || '').match(/\d+/g) || []).map(Number),
+        }))
+        .filter(r => r.text.length > 0)
+        .sort((a, b) => a.y - b.y);
+      const validRows = rows.filter(r => r.nums.length > 0);
+
+      status.textContent = `✓ 完成（${dt}s，${validRows.length} 行有效数据）`;
+
+      const rowsHtml = rows.map((r, i) => `
+        <div style="padding:3px 0;font-size:12px">
+          <span style="color:var(--text-dim)">行 ${i + 1}：</span>
+          <span style="font-family:monospace">"${escapeHtml(r.text)}"</span>
+          <span style="color:var(--accent);font-family:monospace;float:right">${r.nums.length ? '[' + r.nums.join(', ') + ']' : ''}</span>
+        </div>
+      `).join('');
+
       result.innerHTML = `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <div style="color:var(--text-dim);margin-bottom:6px">玩家面板裁剪 + 数字识别：</div>
-            <div style="background:var(--panel-2);padding:8px;border-radius:4px;font-family:ui-monospace,monospace;color:var(--accent);font-weight:600">
-              ${numbers.length ? numbers.join(', ') : '(无)'}
-            </div>
-          </div>
-          <div>
-            <details>
-              <summary style="color:var(--text-dim);cursor:pointer;font-size:12px">原始 OCR 文本</summary>
-              <pre style="background:var(--panel-2);padding:8px;border-radius:4px;white-space:pre-wrap;font-size:11px;margin-top:6px">${data.text.trim() || '(空)'}</pre>
-            </details>
-          </div>
+        <div style="background:var(--panel-2);padding:10px;border-radius:4px">
+          ${rowsHtml || '<i style="color:var(--text-dim)">未识别到内容</i>'}
         </div>
-        <div style="color:var(--text-dim);margin-top:10px;font-size:11px;line-height:1.5">
-          💡 上面蓝色框：识别到的数字。<br>
-          紫框：实际送给 OCR 的图（裁剪过的，应该是左上玩家面板）。<br>
-          如果裁剪偏了或识别不准，告诉我具体错在哪，我调坐标。
-        </div>
+        ${validRows.length > 0 ? `
+          <button id="ocr-apply" class="primary" style="margin-top:10px;width:100%;font-size:14px;padding:10px">
+            ✓ 应用到状态（最后一行 = 你 P0，其余按顺序 = P1/P2/P3）
+          </button>
+          <div style="color:var(--text-dim);margin-top:8px;font-size:11px">
+            点击后会按行写入：每行 3 个数字 = [手牌, 局分, 总分]。如果识别有误请用 ↶撤销。
+          </div>
+        ` : ''}
       `;
+
+      const applyBtn = document.getElementById('ocr-apply');
+      if (applyBtn) applyBtn.onclick = () => applyOCRtoState(validRows);
     } catch (e) {
       status.textContent = '❌ ' + e.message;
       console.error(e);
     }
   }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+}
+
+function applyOCRtoState(validRows) {
+  if (validRows.length === 0) return;
+  pushHistory();
+
+  // 取最后 N 行（最多 4 行）按 y 顺序作为玩家行
+  const playerRows = validRows.slice(-Math.min(4, validRows.length));
+  const numPlayers = state.players.length;
+
+  // 映射规则：playerRows 最后一项 = P0（自己），倒数第二 = P3，依此类推
+  // 因为游戏 UI 通常 "对手们 上, 我 下" 排列
+  // playerRows[length-1] -> P0 ; playerRows[length-2] -> P3 ; ... 不对，应该是顺位环绕
+  // 改成：最后一行 = P0；倒数 i 行 = Pi
+  for (let i = 0; i < playerRows.length; i++) {
+    const r = playerRows[playerRows.length - 1 - i]; // 倒数第 i+1 行
+    const playerIdx = i % numPlayers;                // i=0→P0, i=1→P1, ...
+    const p = state.players[playerIdx];
+    p.handNumbers = [];
+    p.bonusFlatTotal = 0;
+    p.lockedRoundScore = 0;
+    p.status = PlayerStatus.ACTIVE;
+    if (r.nums.length === 1) {
+      p.totalScore = r.nums[0];
+    } else if (r.nums.length === 2) {
+      // 假设 [局分, 总分]
+      p.bonusFlatTotal = r.nums[0];
+      p.totalScore = r.nums[1];
+    } else {
+      // 3+ 个：[手牌数字, 局分, 总分]
+      const hand = r.nums[0];
+      const localScore = r.nums[1];
+      const totalScore = r.nums[r.nums.length - 1];
+      if (hand >= 0 && hand <= 12) p.handNumbers = [hand];
+      // bonus = 局分 - 手牌之和
+      const handSum = p.handNumbers.reduce((s, v) => s + v, 0);
+      p.bonusFlatTotal = Math.max(0, localScore - handSum);
+      p.totalScore = totalScore;
+    }
+  }
+
+  // 重新计算剩余牌库：full - 所有可见手牌
+  state.remaining = DeckCounts.full();
+  for (const p of state.players) {
+    for (const v of p.handNumbers) {
+      if (state.remaining.numbers[v] > 0) state.remaining.numbers[v] -= 1;
+    }
+  }
+
+  addLog('🎯 OCR 自动填入完成（请校验后继续操作）', 'skill');
+  render();
 }
 
 // ============================================================ 入口
