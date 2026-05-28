@@ -6,7 +6,7 @@
  */
 
 import {
-  BONUS_FLAT_AMOUNT, Card, CardKind, Deck, buildFullDeck,
+  BONUS_FLAT_VALUES, Card, CardKind, Deck, buildFullDeck,
 } from './cards.js';
 import { GameEngine } from './engine.js';
 import { GameConfig, PlayerStatus } from './state.js';
@@ -81,7 +81,7 @@ function engineWithStackedTop(topCards, numPlayers = 4) {
 // ----------------------------- deck composition ------------------------------
 function testDeckSize() {
   const deck = buildFullDeck();
-  assertEq(deck.length, 94, 'deck length');
+  assertEq(deck.length, 96, 'deck length');
   /** @type {Record<number, number>} */
   const counts = {};
   for (const c of deck) {

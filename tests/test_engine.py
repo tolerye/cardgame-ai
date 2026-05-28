@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from game.cards import (BONUS_FLAT_AMOUNT, Card, CardKind, Deck, build_full_deck)
+from game.cards import (BONUS_FLAT_VALUES, Card, CardKind, Deck, build_full_deck)
 from game.engine import GameEngine
 from game.state import GameConfig, PlayerStatus
 
@@ -17,7 +17,7 @@ from game.state import GameConfig, PlayerStatus
 # ----------------------------- deck composition ------------------------------
 def test_deck_size():
     deck = build_full_deck()
-    assert len(deck) == 94
+    assert len(deck) == 96
     counts = {}
     for c in deck:
         if c.kind == CardKind.NUMBER:
@@ -27,6 +27,9 @@ def test_deck_size():
     assert counts[1] == 1
     for n in range(2, 13):
         assert counts[n] == n
+    # bonus flat: 5 张不同面值各 1 张
+    flat_values = sorted(c.value for c in deck if c.kind == CardKind.BONUS_FLAT)
+    assert flat_values == BONUS_FLAT_VALUES, flat_values
     print("✓ deck composition")
 
 

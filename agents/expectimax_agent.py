@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from game.cards import BONUS_FLAT_AMOUNT, CardKind, DeckCounts
+from game.cards import BONUS_FLAT_AVG, CardKind, DeckCounts
 from game.state import GameState
 
 from .base import BaseAgent
@@ -106,7 +106,7 @@ class ExpectimaxAgent(BaseAgent):
             new_counts = counts.copy()
             new_counts.bonus_flat -= 1
             ev += p * self._best_value(
-                hand_set, hand_sum, bonus + BONUS_FLAT_AMOUNT, insurance, new_counts, depth - 1,
+                hand_set, hand_sum, bonus + BONUS_FLAT_AVG, insurance, new_counts, depth - 1,
             )
 
         # bonus double — adds another copy of hand_sum (numeric only)

@@ -6,7 +6,7 @@
  */
 
 import {
-  BONUS_FLAT_AMOUNT, Card, CardKind, Deck, DeckCounts, RNG,
+  Card, CardKind, Deck, DeckCounts, RNG,
 } from './cards.js';
 import {
   GameConfig, GameState, PlayerState, PlayerStatus,
@@ -185,8 +185,9 @@ export class GameEngine {
     if (kind === CardKind.NUMBER) {
       this._resolveNumber(idx, card.value);
     } else if (kind === CardKind.BONUS_FLAT) {
-      player.bonusFlatTotal += BONUS_FLAT_AMOUNT;
-      st.addLog(`BONUS+${BONUS_FLAT_AMOUNT}`);
+      // card.value is the flat bonus amount (one of BONUS_FLAT_VALUES)
+      player.bonusFlatTotal += card.value;
+      st.addLog(`BONUS+${card.value}`);
     } else if (kind === CardKind.BONUS_DOUBLE) {
       // double the current numeric hand sum (additive: x → 2x)
       let curSum = 0;

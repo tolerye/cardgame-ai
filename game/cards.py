@@ -26,11 +26,12 @@ class Card:
         return self.kind.value
 
 
-BONUS_FLAT_AMOUNT = 10  # +10 flat bonus
+BONUS_FLAT_VALUES = [2, 4, 6, 8, 10]  # 加分牌：5 张不同面值，各 1 张
+BONUS_FLAT_COUNT = len(BONUS_FLAT_VALUES)  # 5
+BONUS_FLAT_AVG = sum(BONUS_FLAT_VALUES) / len(BONUS_FLAT_VALUES)  # 6.0，给 agent EV 估算
 
 # Counts per the spec
 NUMBER_COUNTS = {0: 1, 1: 1, **{n: n for n in range(2, 13)}}  # total 79
-BONUS_FLAT_COUNT = 3
 BONUS_DOUBLE_COUNT = 3
 SKILL_PER_KIND = 3  # insurance / exile / triple each
 
@@ -39,11 +40,12 @@ def build_full_deck() -> List[Card]:
     deck: List[Card] = []
     for n, count in NUMBER_COUNTS.items():
         deck.extend(Card(CardKind.NUMBER, n) for _ in range(count))
-    deck.extend(Card(CardKind.BONUS_FLAT) for _ in range(BONUS_FLAT_COUNT))
+    for v in BONUS_FLAT_VALUES:
+        deck.append(Card(CardKind.BONUS_FLAT, v))  # value 是加分点数
     deck.extend(Card(CardKind.BONUS_DOUBLE) for _ in range(BONUS_DOUBLE_COUNT))
     for kind in (CardKind.INSURANCE, CardKind.EXILE, CardKind.TRIPLE):
         deck.extend(Card(kind) for _ in range(SKILL_PER_KIND))
-    assert len(deck) == 94, f"expected 94 cards, got {len(deck)}"
+    assert len(deck) == 96, f"expected 96 cards, got {len(deck)}"
     return deck
 
 

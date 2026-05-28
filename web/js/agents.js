@@ -5,7 +5,7 @@
  * NN agents (mcts/neural) are intentionally omitted — won't run in the browser.
  */
 
-import { BONUS_FLAT_AMOUNT, CardKind, RNG } from './cards.js';
+import { BONUS_FLAT_AVG, CardKind, RNG } from './cards.js';
 
 // ============================================================================
 // RandomAgent
@@ -178,7 +178,7 @@ export class EVAgent {
     // +10 flat bonus
     if (counts.bonus_flat > 0) {
       const p = counts.bonus_flat / total;
-      ev += p * (curScore + BONUS_FLAT_AMOUNT);
+      ev += p * (curScore + BONUS_FLAT_AVG);
     }
 
     // double current numeric hand sum (adds another copy of handSumNumeric)
@@ -452,7 +452,7 @@ export class ExpectimaxAgent {
       const newCounts = counts.copy();
       newCounts.bonus_flat -= 1;
       ev += p * this._bestValue(
-        handSet, handSum, bonus + BONUS_FLAT_AMOUNT, insurance, newCounts, depth - 1, sixBurstBonus,
+        handSet, handSum, bonus + BONUS_FLAT_AVG, insurance, newCounts, depth - 1, sixBurstBonus,
       );
     }
 

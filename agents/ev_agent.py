@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from game.cards import BONUS_FLAT_AMOUNT, CardKind, DeckCounts
+from game.cards import BONUS_FLAT_AVG, CardKind, DeckCounts
 from game.state import GameState, PlayerState
 
 from .base import BaseAgent
@@ -106,7 +106,7 @@ class EVAgent(BaseAgent):
         # +10 flat bonus
         if counts.bonus_flat > 0:
             p = counts.bonus_flat / total
-            ev += p * (cur_score + BONUS_FLAT_AMOUNT)
+            ev += p * (cur_score + BONUS_FLAT_AVG)
 
         # double current numeric hand sum (adds another copy of hand_sum_numeric)
         if counts.bonus_double > 0:

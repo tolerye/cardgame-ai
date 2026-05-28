@@ -4,8 +4,7 @@ import copy
 import random
 from typing import List, Optional, Protocol, Sequence
 
-from .cards import (BONUS_FLAT_AMOUNT, Card, CardKind, Deck, DeckCounts,
-                    NUMBER_COUNTS)
+from .cards import (Card, CardKind, Deck, DeckCounts, NUMBER_COUNTS)
 from .state import GameConfig, GameState, PlayerState, PlayerStatus
 
 
@@ -186,8 +185,9 @@ class GameEngine:
         if kind == CardKind.NUMBER:
             self._resolve_number(idx, card.value)
         elif kind == CardKind.BONUS_FLAT:
-            player.bonus_flat_total += BONUS_FLAT_AMOUNT
-            st.add_log(f"BONUS+{BONUS_FLAT_AMOUNT}")
+            # card.value is the flat bonus amount (one of BONUS_FLAT_VALUES)
+            player.bonus_flat_total += card.value
+            st.add_log(f"BONUS+{card.value}")
         elif kind == CardKind.BONUS_DOUBLE:
             # double the current numeric hand sum (additive: x → 2x)
             cur_sum = sum(player.hand_numbers)

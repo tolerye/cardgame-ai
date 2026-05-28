@@ -34,10 +34,14 @@ CYAN = lambda t: C("36", t)
 MAGENTA = lambda t: C("35", t)
 
 
-# 中文别名 → 内部名
+# 中文别名 → 内部名 (+加分值)
+# 加分牌：+2/+4/+6/+8/+10 各 1 张；翻倍牌单独 3 张
 SPECIAL_ALIASES = {
-    "+10": "bonus_flat", "加分": "bonus_flat", "flat": "bonus_flat", "10": "bonus_flat",
-    "翻倍": "bonus_double", "double": "bonus_double", "x2": "bonus_double",
+    # +N 加分牌（具体面值，但 DeckCounts 只记总张数，所以只用 'bonus_flat'）
+    "+2": "bonus_flat", "+4": "bonus_flat", "+6": "bonus_flat",
+    "+8": "bonus_flat", "+10": "bonus_flat",
+    "加分": "bonus_flat", "flat": "bonus_flat",
+    "翻倍": "bonus_double", "double": "bonus_double", "x2": "bonus_double", "×2": "bonus_double",
     "保险": "insurance", "ins": "insurance", "shield": "insurance",
     "放逐": "exile", "exile": "exile",
     "三连": "triple", "triple": "triple",
@@ -257,9 +261,15 @@ def interactive() -> None:
 
     bonus_str = input("  我的加分总分（默认 0）: ").strip() or "0"
     my_bonus = int(bonus_str)
-    # 推算 +10 牌张数（整数除）；剩余的零头不存在
-    my_bonus_flat_count = my_bonus // 10
-    my_bonus_double_count = 0  # 翻倍牌效果难以从 bonus 倒推，直接问
+    # 加分牌张数：用户给加分总分，从 +2/+4/+6/+8/+10 推算最少需要几张能凑出
+    # （advisor 只关心剩余牌库，所以用合理估算即可）
+    my_bonus_flat_count = 0
+    remaining_bonus = my_bonus
+    for v in [10, 8, 6, 4, 2]:
+        if remaining_bonus >= v:
+            my_bonus_flat_count += 1
+            remaining_bonus -= v
+    my_bonus_double_count = 0
     if input("  抽过翻倍牌？(y/n) [n]: ").strip().lower() in ("y", "yes"):
         my_bonus_double_count = 1
     my_insurance = input("  有保险？(y/n) [n]: ").strip().lower() in ("y", "yes")
@@ -314,7 +324,13 @@ def main() -> None:
         return
 
     my_hand = parse_hand(args.hand)
-    my_bonus_flat_count = args.bonus // 10
+    # 同 interactive 推算 flat 张数
+    my_bonus_flat_count = 0
+    remaining = args.bonus
+    for v in [10, 8, 6, 4, 2]:
+        if remaining >= v:
+            my_bonus_flat_count += 1
+            remaining -= v
     my_bonus_double_count = 1 if args.double else 0
     seen_nums, seen_specials = parse_seen(args.seen)
     rem = build_remaining(my_hand, my_bonus_flat_count, my_bonus_double_count,

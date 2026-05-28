@@ -32,7 +32,9 @@ export class Card {
   }
 }
 
-export const BONUS_FLAT_AMOUNT = 10;
+export const BONUS_FLAT_VALUES = [2, 4, 6, 8, 10];  // 加分牌：5 张不同面值，各 1 张
+export const BONUS_FLAT_COUNT = BONUS_FLAT_VALUES.length;  // 5
+export const BONUS_FLAT_AVG = BONUS_FLAT_VALUES.reduce((s, v) => s + v, 0) / BONUS_FLAT_VALUES.length;  // 6.0
 
 // Counts per the spec
 // {0:1, 1:1, 2:2, 3:3, ..., 12:12} = 79
@@ -41,7 +43,6 @@ export const NUMBER_COUNTS = (() => {
   for (let n = 2; n <= 12; n++) m[n] = n;
   return Object.freeze(m);
 })();
-export const BONUS_FLAT_COUNT = 3;
 export const BONUS_DOUBLE_COUNT = 3;
 export const SKILL_PER_KIND = 3; // insurance / exile / triple each
 
@@ -53,13 +54,13 @@ export function buildFullDeck() {
     const v = Number(n);
     for (let i = 0; i < count; i++) deck.push(new Card(CardKind.NUMBER, v));
   }
-  for (let i = 0; i < BONUS_FLAT_COUNT; i++) deck.push(new Card(CardKind.BONUS_FLAT));
+  for (const v of BONUS_FLAT_VALUES) deck.push(new Card(CardKind.BONUS_FLAT, v));
   for (let i = 0; i < BONUS_DOUBLE_COUNT; i++) deck.push(new Card(CardKind.BONUS_DOUBLE));
   for (const kind of [CardKind.INSURANCE, CardKind.EXILE, CardKind.TRIPLE]) {
     for (let i = 0; i < SKILL_PER_KIND; i++) deck.push(new Card(kind));
   }
-  if (deck.length !== 94) {
-    throw new Error(`expected 94 cards, got ${deck.length}`);
+  if (deck.length !== 96) {
+    throw new Error(`expected 96 cards, got ${deck.length}`);
   }
   return deck;
 }
