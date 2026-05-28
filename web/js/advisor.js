@@ -710,6 +710,36 @@ function flashErr() {
 
 // ============================================================ OCR 起步版
 let _screenStream = null;
+let _ocrWorker = null;
+
+async function getOCRWorker() {
+  const T = window.Tesseract;
+  if (!T) return null;
+  if (!_ocrWorker) {
+    _ocrWorker = await T.createWorker('eng');
+    await _ocrWorker.setParameters({
+      tessedit_char_whitelist: '0123456789',
+      tessedit_pageseg_mode: T.PSM ? T.PSM.SINGLE_BLOCK : '6',
+    });
+  }
+  return _ocrWorker;
+}
+
+function cropAndScale(srcCanvas, xRatio, yRatio, wRatio, hRatio, scale = 2) {
+  const sw = srcCanvas.width, sh = srcCanvas.height;
+  const sx = Math.floor(sw * xRatio);
+  const sy = Math.floor(sh * yRatio);
+  const sxw = Math.floor(sw * wRatio);
+  const syh = Math.floor(sh * hRatio);
+  const dest = document.createElement('canvas');
+  dest.width = sxw * scale;
+  dest.height = syh * scale;
+  const ctx = dest.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(srcCanvas, sx, sy, sxw, syh, 0, 0, dest.width, dest.height);
+  return dest;
+}
 
 function setupOCR() {
   const drop = document.getElementById('ocr-drop');
@@ -740,7 +770,6 @@ function setupOCR() {
         captureBtn.hidden = false;
         stopBtn.hidden = false;
         screenStatus.textContent = `✓ 共享中 ${video.videoWidth}×${video.videoHeight}`;
-        // 用户在浏览器里"停止共享"时清理
         _screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
       } catch (e) {
         screenStatus.textContent = '❌ ' + e.message;
@@ -773,7 +802,6 @@ function setupOCR() {
     if (screenStatus) screenStatus.textContent = '';
   }
 
-  // paste / 文件上传
   drop.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', (e) => {
     if (e.target.files[0]) processImage(e.target.files[0]);
@@ -811,24 +839,53 @@ function setupOCR() {
       status.textContent = '❌ Tesseract.js 未加载，刷新页面重试';
       return;
     }
-    status.textContent = '🔍 OCR 识别中...（首次需下载语言包约 3MB）';
+
+    // 针对此游戏 UI：玩家面板在左上角约 (0~45% 宽, 0~32% 高) 区域
+    // 先裁剪 + 2x 放大 + 用 worker 限定字符集
+    const cropped = cropAndScale(srcCanvas, 0, 0, 0.45, 0.32, 2);
+
+    // 显示裁剪结果（让用户确认裁对了）
+    let preview = document.getElementById('ocr-cropped-preview');
+    if (!preview) {
+      preview = document.createElement('canvas');
+      preview.id = 'ocr-cropped-preview';
+      preview.style.cssText = 'max-width:100%;border-radius:4px;margin-top:8px;border:1px solid var(--accent)';
+      canvas.parentNode.insertBefore(preview, result);
+    }
+    preview.width = cropped.width;
+    preview.height = cropped.height;
+    preview.getContext('2d').drawImage(cropped, 0, 0);
+    preview.style.display = 'block';
+
+    status.textContent = '🔍 OCR 识别玩家面板（数字 only，2x 放大）...';
     try {
       const t0 = Date.now();
-      const { data } = await T.recognize(srcCanvas, 'eng');
+      const worker = await getOCRWorker();
+      const { data } = await worker.recognize(cropped);
       const dt = ((Date.now() - t0) / 1000).toFixed(1);
       const numbers = (data.text.match(/\d+/g) || []).map(Number);
-      status.textContent = `✓ 完成（${dt}s，识别 ${numbers.length} 个数字 token）`;
+      status.textContent = `✓ 完成（${dt}s，识别 ${numbers.length} 个数字）`;
+
+      // 同时跑一次全图（不裁剪）作对比
       result.innerHTML = `
-        <div style="color:var(--text-dim);margin-bottom:6px">识别到的数字：</div>
-        <div style="background:var(--panel-2);padding:8px;border-radius:4px;font-family:ui-monospace,monospace">
-          ${numbers.length ? numbers.join(', ') : '(无)'}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <div style="color:var(--text-dim);margin-bottom:6px">玩家面板裁剪 + 数字识别：</div>
+            <div style="background:var(--panel-2);padding:8px;border-radius:4px;font-family:ui-monospace,monospace;color:var(--accent);font-weight:600">
+              ${numbers.length ? numbers.join(', ') : '(无)'}
+            </div>
+          </div>
+          <div>
+            <details>
+              <summary style="color:var(--text-dim);cursor:pointer;font-size:12px">原始 OCR 文本</summary>
+              <pre style="background:var(--panel-2);padding:8px;border-radius:4px;white-space:pre-wrap;font-size:11px;margin-top:6px">${data.text.trim() || '(空)'}</pre>
+            </details>
+          </div>
         </div>
-        <details style="margin-top:8px">
-          <summary style="color:var(--text-dim);cursor:pointer;font-size:12px">原始 OCR 文本</summary>
-          <pre style="background:var(--panel-2);padding:8px;border-radius:4px;white-space:pre-wrap;font-size:11px;margin-top:6px">${data.text.trim()}</pre>
-        </details>
         <div style="color:var(--text-dim);margin-top:10px;font-size:11px;line-height:1.5">
-          💡 起步版本：原始数字。下一步：把游戏 UI 上的 <b>玩家面板</b>（左上）裁剪出来单独识别 → 自动填状态。
+          💡 上面蓝色框：识别到的数字。<br>
+          紫框：实际送给 OCR 的图（裁剪过的，应该是左上玩家面板）。<br>
+          如果裁剪偏了或识别不准，告诉我具体错在哪，我调坐标。
         </div>
       `;
     } catch (e) {
