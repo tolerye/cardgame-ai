@@ -147,12 +147,23 @@ class NeuralMCTSAgent(BaseAgent):
 
 
 # ============================================================== self-play
-def play_one_game(model, n_simulations: int = 100, num_players: int = 4) -> List[TrainingExample]:
-    """Run a self-play match where all 4 seats use NeuralMCTSAgent. Returns
-    one TrainingExample per (state, my_idx) decision encountered."""
+def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
+                   use_batched: bool = True, batch_size: int = 32) -> List[TrainingExample]:
+    """Run a self-play match where all 4 seats use a Neural-MCTS agent.
+
+    use_batched=True (default) uses the much faster BatchedNeuralMCTSAgent
+    which collects leaf states across virtual-loss-spread sims and evaluates
+    them in a single batched forward pass."""
     cfg = GameConfig(num_players=num_players)
-    agents = [NeuralMCTSAgent(model=model, n_simulations=n_simulations,
-                              dirichlet_eps=0.25) for _ in range(num_players)]
+    if use_batched:
+        from agents.batched_mcts import BatchedNeuralMCTSAgent
+        agents = [BatchedNeuralMCTSAgent(model=model,
+                                          n_simulations=n_simulations,
+                                          batch_size=batch_size)
+                   for _ in range(num_players)]
+    else:
+        agents = [NeuralMCTSAgent(model=model, n_simulations=n_simulations,
+                                   dirichlet_eps=0.25) for _ in range(num_players)]
     engine = GameEngine(cfg, agents)
     pending: list[tuple[np.ndarray, np.ndarray, int]] = []  # (features, policy, my_idx)
 
@@ -246,6 +257,8 @@ def main() -> None:
                         help="parallel self-play workers; 0 = serial")
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--out", default="model.pt")
+    parser.add_argument("--resume", default=None,
+                        help="path to existing model checkpoint to continue from")
     args = parser.parse_args()
 
     import time
@@ -254,6 +267,9 @@ def main() -> None:
     from .network import build_model, save
 
     model = build_model()
+    if args.resume:
+        model.load_state_dict(torch.load(args.resume, map_location="cpu"))
+        print(f"Resumed from {args.resume}")
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     buffer: list[TrainingExample] = []
