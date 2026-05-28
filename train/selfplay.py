@@ -148,7 +148,8 @@ class NeuralMCTSAgent(BaseAgent):
 
 # ============================================================== self-play
 def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
-                   use_batched: bool = True, batch_size: int = 32) -> List[TrainingExample]:
+                   use_batched: bool = True, batch_size: int = 32,
+                   device: str = "cpu") -> List[TrainingExample]:
     """Run a self-play match where all 4 seats use a Neural-MCTS agent.
 
     use_batched=True (default) uses the much faster BatchedNeuralMCTSAgent
@@ -167,7 +168,8 @@ def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
                                           dirichlet_eps=0.25,
                                           dirichlet_alpha=0.5,
                                           temperature=1.0,
-                                          hybrid_alpha=0.5)
+                                          hybrid_alpha=0.5,
+                                          device=device)
                    for _ in range(num_players)]
     else:
         agents = [NeuralMCTSAgent(model=model, n_simulations=n_simulations,
@@ -213,11 +215,11 @@ def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
     return examples
 
 
-def train_step(model, optimizer, batch: List[TrainingExample]):
+def train_step(model, optimizer, batch: List[TrainingExample], device: str = "cpu"):
     import torch
-    X = torch.from_numpy(np.stack([b.features for b in batch]))
-    P = torch.from_numpy(np.stack([b.policy for b in batch]))
-    Z = torch.from_numpy(np.array([b.value for b in batch], dtype=np.float32))
+    X = torch.from_numpy(np.stack([b.features for b in batch])).to(device)
+    P = torch.from_numpy(np.stack([b.policy for b in batch])).to(device)
+    Z = torch.from_numpy(np.array([b.value for b in batch], dtype=np.float32)).to(device)
     logits, v = model(X)
     log_p = torch.log_softmax(logits, dim=-1)
     policy_loss = -(P * log_p).sum(dim=-1).mean()
@@ -230,7 +232,8 @@ def train_step(model, optimizer, batch: List[TrainingExample]):
 
 
 # ============================================================ multiprocessing
-def _worker_play(weights_bytes: bytes, n_games: int, n_sims: int, seed: int) -> List[TrainingExample]:
+def _worker_play(weights_bytes: bytes, n_games: int, n_sims: int, seed: int,
+                  device: str = "cpu") -> List[TrainingExample]:
     """Worker entry: rebuild model from serialized weights, play N games."""
     import io
     import random as _random
@@ -241,21 +244,29 @@ def _worker_play(weights_bytes: bytes, n_games: int, n_sims: int, seed: int) -> 
     from .network import build_model
     model = build_model()
     model.load_state_dict(torch.load(io.BytesIO(weights_bytes), map_location="cpu"))
+    if device != "cpu":
+        try:
+            model = model.to(device)
+        except Exception as e:
+            print(f"⚠ worker failed to move model to {device}: {e}; falling back to cpu")
+            device = "cpu"
     model.eval()
     out: List[TrainingExample] = []
     for _ in range(n_games):
-        out.extend(play_one_game(model, n_simulations=n_sims))
+        out.extend(play_one_game(model, n_simulations=n_sims, device=device))
     return out
 
 
 def parallel_self_play(model, n_workers: int, total_games: int, n_sims: int,
-                        base_seed: int = 0) -> List[TrainingExample]:
+                        base_seed: int = 0, device: str = "cpu") -> List[TrainingExample]:
     """Distribute `total_games` across `n_workers` spawn workers."""
     import io
     import multiprocessing as mp
     import torch
     buf = io.BytesIO()
-    torch.save(model.state_dict(), buf)
+    # 保存到 CPU 字节流便于传给 worker
+    cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    torch.save(cpu_state, buf)
     weights = buf.getvalue()
 
     games_per = [total_games // n_workers] * n_workers
@@ -263,7 +274,7 @@ def parallel_self_play(model, n_workers: int, total_games: int, n_sims: int,
         games_per[i] += 1
 
     ctx = mp.get_context("spawn")
-    args = [(weights, g, n_sims, base_seed + i) for i, g in enumerate(games_per) if g > 0]
+    args = [(weights, g, n_sims, base_seed + i, device) for i, g in enumerate(games_per) if g > 0]
     examples: List[TrainingExample] = []
     with ctx.Pool(processes=len(args)) as pool:
         for chunk in pool.starmap(_worker_play, args):
@@ -282,6 +293,8 @@ def main() -> None:
     parser.add_argument("--out", default="model.pt")
     parser.add_argument("--resume", default=None,
                         help="path to existing model checkpoint to continue from")
+    parser.add_argument("--device", default="cpu",
+                        help="cpu / mps / cuda — 实测 30K 小网络 + batch=1 推理 CPU 通常更快")
     args = parser.parse_args()
 
     import time
@@ -293,6 +306,13 @@ def main() -> None:
     if args.resume:
         model.load_state_dict(torch.load(args.resume, map_location="cpu"))
         print(f"Resumed from {args.resume}")
+    if args.device != "cpu":
+        try:
+            model = model.to(args.device)
+            print(f"Model on {args.device}")
+        except Exception as e:
+            print(f"⚠ failed to move model to {args.device}: {e}; falling back to cpu")
+            args.device = "cpu"
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     buffer: list[TrainingExample] = []
@@ -304,11 +324,13 @@ def main() -> None:
                 total_games=args.games_per_iter,
                 n_sims=args.n_sims,
                 base_seed=it * 1000,
+                device=args.device,
             )
             buffer.extend(new_examples)
         else:
             for _ in range(args.games_per_iter):
-                buffer.extend(play_one_game(model, n_simulations=args.n_sims))
+                buffer.extend(play_one_game(model, n_simulations=args.n_sims,
+                                              device=args.device))
         sp_time = time.time() - t0
         # sample
         if len(buffer) > 8192:
@@ -323,7 +345,7 @@ def main() -> None:
             chunk = buffer[i:i + bs]
             if len(chunk) < 4:
                 continue
-            p, v = train_step(model, optimizer, chunk)
+            p, v = train_step(model, optimizer, chunk, device=args.device)
             pl += p
             vl += v
             nbat += 1

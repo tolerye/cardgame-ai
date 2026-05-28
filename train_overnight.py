@@ -69,6 +69,7 @@ def main() -> None:
     parser.add_argument("--early-stop-drop", type=float, default=DEFAULTS["early_stop_drop"],
                         help="低于 baseline 多少 pp 算退化")
     parser.add_argument("--no-resume", action="store_true", help="从随机权重起步")
+    parser.add_argument("--device", default="cpu", help="cpu / mps / cuda")
     parser.add_argument("--out", default="model.pt", help="模型输出路径")
     parser.add_argument("--ckpt-prefix", default="model_iter", help="checkpoint 前缀")
     args = parser.parse_args()
@@ -100,6 +101,7 @@ def main() -> None:
             "--games-per-iter", str(args.games),
             "--workers", str(args.workers),
             "--n-sims", str(args.n_sims),
+            "--device", args.device,
             "--out", args.out,
         ]
         # 第一批 + no-resume 时不传 --resume；之后每批都从上次的 out 续训
