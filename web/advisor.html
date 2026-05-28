@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>决策助手 · 牌局对战</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .nav { display: flex; gap: 16px; margin-bottom: 16px; }
+    .nav a { color: var(--accent); text-decoration: none; padding: 6px 0; }
+    .nav a.active { border-bottom: 2px solid var(--accent); font-weight: 600; }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin: 10px 0;
+    }
+    .form-row label { color: var(--text-dim); font-size: 14px; }
+    .form-row input[type="text"], .form-row input[type="number"] {
+      width: 100%;
+    }
+    .checkbox-row {
+      display: flex;
+      gap: 24px;
+      align-items: center;
+      color: var(--text-dim);
+      font-size: 14px;
+      margin: 12px 0;
+    }
+    .checkbox-row label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+
+    .quick-pick {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 6px 0;
+    }
+    .pick-btn {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-family: ui-monospace, monospace;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      min-width: 36px;
+      text-align: center;
+    }
+    .pick-btn:hover { border-color: var(--accent); }
+    .pick-btn.active {
+      background: var(--accent);
+      color: var(--bg);
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    .pick-btn .count {
+      font-size: 10px;
+      vertical-align: super;
+      margin-left: 2px;
+    }
+
+    .result-box {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-top: 12px;
+    }
+    .result-box h3 { font-size: 14px; color: var(--text-dim); margin-bottom: 8px; }
+    .prob-row {
+      display: grid;
+      grid-template-columns: 24px 110px 70px 1fr;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 14px;
+    }
+    .prob-row .pct { font-family: ui-monospace, monospace; text-align: right; font-weight: 600; }
+    .prob-row .note { color: var(--text-dim); font-size: 13px; }
+    .prob-row.danger .pct { color: var(--red); }
+    .prob-row.warn .pct { color: var(--yellow); }
+    .prob-row.safe .pct { color: var(--green); }
+    .prob-bar {
+      grid-column: 1 / -1;
+      height: 3px;
+      background: var(--panel);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 2px;
+    }
+    .prob-bar-fill { height: 100%; transition: width .3s; }
+
+    .ev-compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .ev-card {
+      padding: 12px;
+      border-radius: 6px;
+      text-align: center;
+    }
+    .ev-card.win { border: 2px solid var(--green); background: rgba(63,185,80,.06); }
+    .ev-card.lose { border: 1px solid var(--border); opacity: .6; }
+    .ev-card .label { color: var(--text-dim); font-size: 13px; margin-bottom: 4px; }
+    .ev-card .value { font-size: 24px; font-weight: 700; }
+    .ev-card .value.win { color: var(--green); }
+
+    .recommend {
+      background: linear-gradient(135deg, rgba(63,185,80,.12), rgba(88,166,255,.05));
+      border: 1.5px solid var(--green);
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 12px;
+      text-align: center;
+    }
+    .recommend.fold {
+      background: linear-gradient(135deg, rgba(210,153,34,.12), rgba(248,81,73,.05));
+      border-color: var(--yellow);
+    }
+    .recommend .verdict { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .recommend .reason { color: var(--text-dim); font-size: 13px; }
+
+    .warning-banner {
+      background: rgba(248,81,73,.08);
+      border: 1px solid var(--red);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--red);
+      font-size: 13px;
+      margin: 8px 0;
+    }
+    .winning-banner {
+      background: rgba(63,185,80,.12);
+      border: 1px solid var(--green);
+      border-radius: 6px;
+      padding: 10px 14px;
+      color: var(--green);
+      font-weight: 600;
+      margin: 8px 0;
+    }
+
+    details.help {
+      color: var(--text-dim);
+      font-size: 13px;
+      margin: 8px 0;
+    }
+    details.help summary { cursor: pointer; user-select: none; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="nav">
+      <a href="index.html">🎲 开始游戏</a>
+      <a href="advisor.html" class="active">🔮 决策助手</a>
+    </div>
+
+    <section class="card">
+      <h1>🔮 决策助手</h1>
+      <p class="subtitle">输入当前局面，Expectimax 计算应该 <b>继续摸牌</b> 还是 <b>跑路锁分</b>。</p>
+
+      <!-- ============ 输入区 ============ -->
+      <h3 style="margin-top:16px">我的状态</h3>
+
+      <div class="form-row">
+        <label>手牌（数字）</label>
+        <div>
+          <div id="my-hand-display" style="margin-bottom:6px;color:var(--text-dim)">点下面数字加入手牌：</div>
+          <div class="quick-pick" id="my-hand-picker"></div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label>加分总分</label>
+        <input type="number" id="my-bonus" min="0" max="40" value="0" step="2">
+      </div>
+
+      <div class="checkbox-row">
+        <label><input type="checkbox" id="my-insurance"> 有保险</label>
+        <label><input type="checkbox" id="my-double"> 抽过翻倍牌</label>
+      </div>
+
+      <div class="form-row">
+        <label>我的总分</label>
+        <input type="number" id="my-total" min="0" max="500" value="0">
+      </div>
+
+      <div class="form-row">
+        <label>目标分</label>
+        <input type="number" id="target" min="50" max="500" value="200" step="10">
+      </div>
+
+      <div class="form-row">
+        <label>玩家数</label>
+        <input type="number" id="num-players" min="2" max="6" value="4">
+      </div>
+
+      <h3 style="margin-top:20px">已见过的其他牌</h3>
+      <details class="help">
+        <summary>说明</summary>
+        <p>点击数字/特殊牌按钮代表"这张已经被某玩家拿走了"或者"在弃牌堆里"。可重复点（多张相同数字）。点击右键或长按可减一张。</p>
+      </details>
+
+      <div class="form-row">
+        <label>数字 (0-12)</label>
+        <div class="quick-pick" id="seen-num-picker"></div>
+      </div>
+
+      <div class="form-row">
+        <label>加分牌</label>
+        <div class="quick-pick" id="seen-bonus-picker"></div>
+      </div>
+
+      <div class="form-row">
+        <label>技能牌</label>
+        <div class="quick-pick" id="seen-skill-picker"></div>
+      </div>
+
+      <button id="analyze-btn" class="primary big" style="margin-top:16px;width:100%">🔍 分析</button>
+
+      <!-- ============ 结果区 ============ -->
+      <div id="result" hidden>
+        <hr style="margin:24px 0;border:none;border-top:1px solid var(--border)">
+
+        <h3>📊 当前局面</h3>
+        <div class="result-box" id="state-summary"></div>
+
+        <div id="banners"></div>
+
+        <h3 style="margin-top:16px">📊 抽下一张的概率分解</h3>
+        <div class="result-box" id="prob-detail"></div>
+
+        <h3 style="margin-top:16px">📈 期望值对比</h3>
+        <div class="ev-compare" id="ev-compare"></div>
+
+        <div id="recommend"></div>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="js/advisor.js"></script>
+</body>
+</html>
