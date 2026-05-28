@@ -174,7 +174,29 @@ class EVAgent(BaseAgent):
             return target.index
 
         if kind == CardKind.TRIPLE:
-            # prefer victims most likely to bust: lots of unique numbers, no insurance.
+            # Self-triple option: with 5 distinct numbers, three forced draws
+            # have a real shot at the 6th. Only worth it when the upside
+            # (six-burst +15 + locked round) outweighs bust risk.
+            me = state.players[my_idx]
+            if len(me.unique_numbers) == 5:
+                counts = state.remaining
+                total = counts.total()
+                if total > 0:
+                    safe_n = sum(c for v, c in counts.numbers.items()
+                                 if v not in me.unique_numbers)
+                    bad_n = sum(counts.numbers[v] for v in me.unique_numbers)
+                    non_number = total - safe_n - bad_n  # bonus / skill cards
+                    # crude expected value: probability at least one of 3 picks
+                    # is a "safe number" reaching 6-burst, vs bust probability.
+                    p_safe_per = (safe_n + non_number) / total  # non-number ≈ safe
+                    p_six = 1.0 - (1.0 - safe_n / total) ** 3
+                    p_bust = 1.0 - (1.0 - bad_n / total) ** 3
+                    # Prefer self-triple if six-burst is likely AND bust risk is low
+                    # (or we have insurance to absorb one).
+                    if p_six > 0.55 and (me.has_insurance or p_bust < 0.4):
+                        return my_idx
+
+            # Otherwise pick the most likely-to-bust opponent.
             counts = state.remaining
             total = max(counts.total(), 1)
 
