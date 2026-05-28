@@ -3,244 +3,274 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>决策助手 · 牌局对战</title>
+  <title>实时决策助手 · 牌局对战</title>
   <link rel="stylesheet" href="style.css">
   <style>
-    .nav { display: flex; gap: 16px; margin-bottom: 16px; }
-    .nav a { color: var(--accent); text-decoration: none; padding: 6px 0; }
-    .nav a.active { border-bottom: 2px solid var(--accent); font-weight: 600; }
+    .nav { display: flex; gap: 16px; margin-bottom: 16px; font-size: 14px; }
+    .nav a { color: var(--text-dim); text-decoration: none; padding: 6px 0; }
+    .nav a.active { color: var(--accent); border-bottom: 2px solid var(--accent); font-weight: 600; }
 
-    .form-row {
-      display: grid;
-      grid-template-columns: 140px 1fr;
+    /* 顶部状态栏 */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       gap: 12px;
-      align-items: center;
-      margin: 10px 0;
-    }
-    .form-row label { color: var(--text-dim); font-size: 14px; }
-    .form-row input[type="text"], .form-row input[type="number"] {
-      width: 100%;
-    }
-    .checkbox-row {
-      display: flex;
-      gap: 24px;
-      align-items: center;
-      color: var(--text-dim);
-      font-size: 14px;
-      margin: 12px 0;
-    }
-    .checkbox-row label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
-
-    .quick-pick {
-      display: flex;
       flex-wrap: wrap;
-      gap: 4px;
-      margin: 6px 0;
-    }
-    .pick-btn {
+      padding: 10px 14px;
       background: var(--panel-2);
+      border-radius: 6px;
+      margin-bottom: 12px;
+      font-size: 14px;
+    }
+    .top-bar .meta { color: var(--text-dim); }
+    .top-bar .meta b { color: var(--text); margin: 0 2px; }
+    .top-bar button { font-size: 13px; padding: 4px 10px; }
+
+    /* 玩家网格 */
+    .players {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .player {
+      background: var(--panel);
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all .15s;
+    }
+    .player:hover { border-color: var(--accent); }
+    .player.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(88,166,255,.2);
+      background: linear-gradient(180deg, rgba(88,166,255,.1), transparent);
+    }
+    .player.is-me {
+      background: linear-gradient(180deg, rgba(63,185,80,.08), transparent);
+    }
+    .player.is-me.active {
+      border-color: var(--green);
+      box-shadow: 0 0 0 2px rgba(63,185,80,.2);
+    }
+    .player.status-folded, .player.status-busted, .player.status-exiled { opacity: .55; }
+
+    .p-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .p-name { font-weight: 600; }
+    .p-emoji { font-size: 16px; }
+    .p-total { font-size: 22px; font-weight: 700; line-height: 1.1; }
+    .p-line { color: var(--text-dim); margin: 2px 0; font-size: 12px; }
+    .p-hand {
+      font-family: ui-monospace, monospace;
+      color: var(--blue);
+      font-size: 12px;
+      margin-top: 4px;
+      min-height: 18px;
+    }
+    .p-bonus { color: var(--green); margin-left: 6px; }
+    .p-ins { color: var(--yellow); margin-left: 6px; }
+
+    /* 推荐区 */
+    .reco {
+      background: linear-gradient(135deg, rgba(63,185,80,.08), transparent);
+      border: 1.5px solid var(--green);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 16px;
+    }
+    .reco.fold {
+      background: linear-gradient(135deg, rgba(210,153,34,.1), transparent);
+      border-color: var(--yellow);
+    }
+    .reco.danger {
+      background: linear-gradient(135deg, rgba(248,81,73,.1), transparent);
+      border-color: var(--red);
+    }
+    .reco .verdict { font-size: 22px; font-weight: 700; }
+    .reco .reason { color: var(--text-dim); font-size: 13px; line-height: 1.4; }
+    .reco .ev { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-dim); }
+
+    /* 操作面板 */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .panel h4 {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(13, 1fr);
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+    .card-grid.special { grid-template-columns: repeat(6, 1fr); }
+    .draw-btn {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      padding: 8px 4px;
+      font-family: ui-monospace, monospace;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all .1s;
+      text-align: center;
+      user-select: none;
+      position: relative;
+    }
+    .draw-btn:hover { border-color: var(--accent); background: rgba(88,166,255,.1); }
+    .draw-btn:disabled, .draw-btn.depleted {
+      opacity: .25; cursor: not-allowed; pointer-events: none;
+    }
+    .draw-btn .left {
+      position: absolute;
+      top: 1px;
+      right: 3px;
+      font-size: 9px;
+      color: var(--text-dim);
+    }
+    .draw-btn.in-hand {
+      background: rgba(248,81,73,.12);
+      border-color: var(--red);
+      color: var(--red);
+    }
+    .draw-btn.special-tile { font-size: 13px; padding: 8px 6px; }
+
+    .action-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .action-row button { font-size: 13px; padding: 6px 14px; }
+    .action-row .label { color: var(--text-dim); font-size: 13px; align-self: center; margin-right: 4px; }
+
+    /* 历史日志 */
+    .log {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      max-height: 240px;
+      overflow-y: auto;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+    }
+    .log h4 { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+    .log .entry { padding: 3px 0; color: var(--text-dim); }
+    .log .entry.is-me { color: var(--text); font-weight: 600; }
+    .log .entry.bust { color: var(--red); }
+    .log .entry.six { color: var(--yellow); font-weight: 700; }
+    .log .entry.skill { color: var(--magenta); }
+    .log .entry.bonus { color: var(--green); }
+
+    /* 探针/概率细节 */
+    .probs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 4px 16px;
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+    .probs .row { display: flex; justify-content: space-between; padding: 2px 0; }
+    .probs .row b { font-family: ui-monospace, monospace; color: var(--text); }
+    .probs .danger b { color: var(--red); }
+    .probs .warn b { color: var(--yellow); }
+
+    .undo-btn {
+      background: transparent;
+      color: var(--text-dim);
       border: 1px solid var(--border);
       border-radius: 4px;
       padding: 4px 10px;
-      font-family: ui-monospace, monospace;
-      font-size: 13px;
-      color: var(--text);
-      cursor: pointer;
-      user-select: none;
-      min-width: 36px;
-      text-align: center;
-    }
-    .pick-btn:hover { border-color: var(--accent); }
-    .pick-btn.active {
-      background: var(--accent);
-      color: var(--bg);
-      border-color: var(--accent);
-      font-weight: 600;
-    }
-    .pick-btn .count {
-      font-size: 10px;
-      vertical-align: super;
-      margin-left: 2px;
+      font-size: 12px;
     }
 
-    .result-box {
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px 16px;
-      margin-top: 12px;
+    @media (max-width: 720px) {
+      .players { grid-template-columns: repeat(2, 1fr); }
+      .card-grid { grid-template-columns: repeat(7, 1fr); }
     }
-    .result-box h3 { font-size: 14px; color: var(--text-dim); margin-bottom: 8px; }
-    .prob-row {
-      display: grid;
-      grid-template-columns: 24px 110px 70px 1fr;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 0;
-      font-size: 14px;
-    }
-    .prob-row .pct { font-family: ui-monospace, monospace; text-align: right; font-weight: 600; }
-    .prob-row .note { color: var(--text-dim); font-size: 13px; }
-    .prob-row.danger .pct { color: var(--red); }
-    .prob-row.warn .pct { color: var(--yellow); }
-    .prob-row.safe .pct { color: var(--green); }
-    .prob-bar {
-      grid-column: 1 / -1;
-      height: 3px;
-      background: var(--panel);
-      border-radius: 2px;
-      overflow: hidden;
-      margin-top: 2px;
-    }
-    .prob-bar-fill { height: 100%; transition: width .3s; }
-
-    .ev-compare {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin: 16px 0;
-    }
-    .ev-card {
-      padding: 12px;
-      border-radius: 6px;
-      text-align: center;
-    }
-    .ev-card.win { border: 2px solid var(--green); background: rgba(63,185,80,.06); }
-    .ev-card.lose { border: 1px solid var(--border); opacity: .6; }
-    .ev-card .label { color: var(--text-dim); font-size: 13px; margin-bottom: 4px; }
-    .ev-card .value { font-size: 24px; font-weight: 700; }
-    .ev-card .value.win { color: var(--green); }
-
-    .recommend {
-      background: linear-gradient(135deg, rgba(63,185,80,.12), rgba(88,166,255,.05));
-      border: 1.5px solid var(--green);
-      border-radius: 8px;
-      padding: 16px;
-      margin-top: 12px;
-      text-align: center;
-    }
-    .recommend.fold {
-      background: linear-gradient(135deg, rgba(210,153,34,.12), rgba(248,81,73,.05));
-      border-color: var(--yellow);
-    }
-    .recommend .verdict { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-    .recommend .reason { color: var(--text-dim); font-size: 13px; }
-
-    .warning-banner {
-      background: rgba(248,81,73,.08);
-      border: 1px solid var(--red);
-      border-radius: 6px;
-      padding: 8px 12px;
-      color: var(--red);
-      font-size: 13px;
-      margin: 8px 0;
-    }
-    .winning-banner {
-      background: rgba(63,185,80,.12);
-      border: 1px solid var(--green);
-      border-radius: 6px;
-      padding: 10px 14px;
-      color: var(--green);
-      font-weight: 600;
-      margin: 8px 0;
-    }
-
-    details.help {
-      color: var(--text-dim);
-      font-size: 13px;
-      margin: 8px 0;
-    }
-    details.help summary { cursor: pointer; user-select: none; }
   </style>
 </head>
 <body>
   <div id="app">
     <div class="nav">
       <a href="index.html">🎲 开始游戏</a>
-      <a href="advisor.html" class="active">🔮 决策助手</a>
+      <a href="advisor.html" class="active">🔮 实时助手</a>
     </div>
 
-    <section class="card">
-      <h1>🔮 决策助手</h1>
-      <p class="subtitle">输入当前局面，Expectimax 计算应该 <b>继续摸牌</b> 还是 <b>跑路锁分</b>。</p>
-
-      <!-- ============ 输入区 ============ -->
-      <h3 style="margin-top:16px">我的状态</h3>
-
-      <div class="form-row">
-        <label>手牌（数字）</label>
-        <div>
-          <div id="my-hand-display" style="margin-bottom:6px;color:var(--text-dim)">点下面数字加入手牌：</div>
-          <div class="quick-pick" id="my-hand-picker"></div>
-        </div>
+    <div class="top-bar">
+      <div class="meta">
+        第 <b id="round-num">1</b> 局 ·
+        目标 <b id="target-display">200</b> ·
+        剩余 <b id="deck-remaining">96</b>/96
       </div>
-
-      <div class="form-row">
-        <label>加分总分</label>
-        <input type="number" id="my-bonus" min="0" max="40" value="0" step="2">
+      <div>
+        目标分 <input type="number" id="target-input" value="200" min="50" max="500" step="10" style="width:60px;font-size:13px;padding:3px 6px">
+        <button id="undo-btn" class="undo-btn">↶ 撤销</button>
+        <button id="reset-btn" class="undo-btn">↻ 重置</button>
+        <button id="next-round-btn" class="undo-btn">⤴ 进入下一局</button>
       </div>
+    </div>
 
-      <div class="checkbox-row">
-        <label><input type="checkbox" id="my-insurance"> 有保险</label>
-        <label><input type="checkbox" id="my-double"> 抽过翻倍牌</label>
+    <!-- 推荐区 -->
+    <div id="reco" class="reco">
+      <div style="font-size:32px">🎲</div>
+      <div>
+        <div class="verdict">先选活跃玩家，然后点击抽到的牌</div>
+        <div class="reason">点击玩家卡片切换"轮到谁"，再点击下方的牌按钮表示该玩家抽到这张</div>
       </div>
+      <div></div>
+    </div>
 
-      <div class="form-row">
-        <label>我的总分</label>
-        <input type="number" id="my-total" min="0" max="500" value="0">
+    <!-- 玩家网格 -->
+    <div class="players" id="players"></div>
+
+    <!-- 概率分解 -->
+    <div class="panel" id="probs-panel" hidden>
+      <h4>📊 抽下一张的概率分解（基于活跃玩家手牌）</h4>
+      <div class="probs" id="probs"></div>
+    </div>
+
+    <!-- 操作面板：抽牌 -->
+    <div class="panel">
+      <h4>📥 当前活跃玩家：<b id="active-name">P0（你）</b> 抽到</h4>
+      <div class="card-grid" id="num-grid"></div>
+      <div class="card-grid special" id="special-grid"></div>
+
+      <div class="action-row">
+        <span class="label">或玩家行动：</span>
+        <button id="action-fold">🔒 跑路</button>
+        <button id="action-bust">💥 标记爆牌（跳过抽牌直接出局）</button>
       </div>
+    </div>
 
-      <div class="form-row">
-        <label>目标分</label>
-        <input type="number" id="target" min="50" max="500" value="200" step="10">
-      </div>
-
-      <div class="form-row">
-        <label>玩家数</label>
-        <input type="number" id="num-players" min="2" max="6" value="4">
-      </div>
-
-      <h3 style="margin-top:20px">已见过的其他牌</h3>
-      <details class="help">
-        <summary>说明</summary>
-        <p>点击数字/特殊牌按钮代表"这张已经被某玩家拿走了"或者"在弃牌堆里"。可重复点（多张相同数字）。点击右键或长按可减一张。</p>
-      </details>
-
-      <div class="form-row">
-        <label>数字 (0-12)</label>
-        <div class="quick-pick" id="seen-num-picker"></div>
-      </div>
-
-      <div class="form-row">
-        <label>加分牌</label>
-        <div class="quick-pick" id="seen-bonus-picker"></div>
-      </div>
-
-      <div class="form-row">
-        <label>技能牌</label>
-        <div class="quick-pick" id="seen-skill-picker"></div>
-      </div>
-
-      <button id="analyze-btn" class="primary big" style="margin-top:16px;width:100%">🔍 分析</button>
-
-      <!-- ============ 结果区 ============ -->
-      <div id="result" hidden>
-        <hr style="margin:24px 0;border:none;border-top:1px solid var(--border)">
-
-        <h3>📊 当前局面</h3>
-        <div class="result-box" id="state-summary"></div>
-
-        <div id="banners"></div>
-
-        <h3 style="margin-top:16px">📊 抽下一张的概率分解</h3>
-        <div class="result-box" id="prob-detail"></div>
-
-        <h3 style="margin-top:16px">📈 期望值对比</h3>
-        <div class="ev-compare" id="ev-compare"></div>
-
-        <div id="recommend"></div>
-      </div>
-    </section>
+    <!-- 历史日志 -->
+    <div class="log">
+      <h4>📜 操作历史</h4>
+      <div id="event-log"></div>
+    </div>
   </div>
 
   <script type="module" src="js/advisor.js"></script>

@@ -1,382 +1,548 @@
 /**
- * Web 版决策助手：用户输入当前局面 → 调 ExpectimaxAgent 给建议 + 概率分解。
- * 镜像 advisor.py 的逻辑。
+ * 实时决策助手：用户手动驱动每张牌的抽取，状态实时更新，每一步都给推荐。
+ *
+ * 核心逻辑：维护 GameState（复用现有 PlayerState/DeckCounts），用户每次
+ * 点一张牌就模拟一次"活跃玩家抽到这张牌"的事件 —— 数字加入手牌、
+ * 加分入账、技能弹目标选择、爆牌/六翻自动判断。每次状态变化重新调
+ * ExpectimaxAgent 给推荐。
  */
 
 import {
-  BONUS_FLAT_AVG, BONUS_FLAT_VALUES, DeckCounts,
+  BONUS_FLAT_VALUES, BONUS_FLAT_AVG, Card, CardKind, DeckCounts,
 } from './cards.js';
 import {
   GameConfig, GameState, PlayerState, PlayerStatus,
 } from './state.js';
 import { ExpectimaxAgent } from './agents.js';
 
-// ============ 状态 ============
-const myHand = []; // [3, 5, 8] 手牌数字（可能重复出现，但 unique 才算手牌）
-const seenNums = {}; // {3: 2, 5: 1, ...} 已见过的数字（含其他玩家手牌+弃牌堆）
-const seenSpecials = { bonus_flat: 0, bonus_double: 0, insurance: 0, exile: 0, triple: 0 };
+// ============================================================ 全局状态
+let state;            // GameState
+let activeIdx = 0;    // 当前活跃玩家
+let history = [];     // [{ snapshot: state-deep-copy, log: '...' }]
+let logEntries = [];  // 历史日志条目
+const NUM_PLAYERS = 4;
 
-// ============ 初始化按钮 ============
-function buildPickers() {
-  // 我的手牌：13 个数字，点击切换是否在手中
-  const myDiv = document.getElementById('my-hand-picker');
-  for (let n = 0; n <= 12; n++) {
-    const btn = document.createElement('div');
-    btn.className = 'pick-btn';
-    btn.textContent = n;
-    btn.dataset.num = n;
-    btn.addEventListener('click', () => toggleMyHand(n));
-    myDiv.appendChild(btn);
-  }
-
-  // 已见数字：点 +1，右键 / 长按 -1
-  const numDiv = document.getElementById('seen-num-picker');
-  for (let n = 0; n <= 12; n++) {
-    const btn = makeCounter('seen-num-' + n, n.toString(), () => addSeenNum(n), () => subSeenNum(n));
-    btn.dataset.num = n;
-    numDiv.appendChild(btn);
-  }
-
-  // 已见加分牌
-  const bonusDiv = document.getElementById('seen-bonus-picker');
-  for (const v of BONUS_FLAT_VALUES) {
-    const btn = makeCounter(`seen-flat-${v}`, `+${v}`,
-      () => addSeenSpecial('bonus_flat'), () => subSeenSpecial('bonus_flat'));
-    bonusDiv.appendChild(btn);
-  }
-  bonusDiv.appendChild(makeCounter('seen-double', '×2',
-    () => addSeenSpecial('bonus_double'), () => subSeenSpecial('bonus_double')));
-
-  // 已见技能牌
-  const skillDiv = document.getElementById('seen-skill-picker');
-  skillDiv.appendChild(makeCounter('seen-ins', '🛡 保险',
-    () => addSeenSpecial('insurance'), () => subSeenSpecial('insurance')));
-  skillDiv.appendChild(makeCounter('seen-exile', '🚷 放逐',
-    () => addSeenSpecial('exile'), () => subSeenSpecial('exile')));
-  skillDiv.appendChild(makeCounter('seen-triple', '⚡ 三连',
-    () => addSeenSpecial('triple'), () => subSeenSpecial('triple')));
-}
-
-function makeCounter(id, label, onAdd, onSub) {
-  const btn = document.createElement('div');
-  btn.className = 'pick-btn';
-  btn.id = id;
-  btn.innerHTML = `<span>${label}</span><span class="count" data-count="0"></span>`;
-  btn.addEventListener('click', onAdd);
-  btn.addEventListener('contextmenu', e => { e.preventDefault(); onSub(); });
-  // 长按 -1（移动端）
-  let timer = null;
-  btn.addEventListener('touchstart', () => {
-    timer = setTimeout(() => { onSub(); timer = null; }, 500);
-  });
-  btn.addEventListener('touchend', () => {
-    if (timer) clearTimeout(timer);
-  });
-  return btn;
-}
-
-function toggleMyHand(n) {
-  const idx = myHand.indexOf(n);
-  if (idx >= 0) myHand.splice(idx, 1);
-  else myHand.push(n);
-  refreshMyHand();
-}
-
-function refreshMyHand() {
-  document.querySelectorAll('#my-hand-picker .pick-btn').forEach(btn => {
-    const n = parseInt(btn.dataset.num);
-    btn.classList.toggle('active', myHand.includes(n));
-  });
-  const display = document.getElementById('my-hand-display');
-  if (myHand.length === 0) {
-    display.textContent = '点下面数字加入手牌：';
-  } else {
-    const sorted = myHand.slice().sort((a, b) => a - b);
-    display.innerHTML = `当前手牌: <b style="color:var(--accent);font-family:ui-monospace,monospace">[${sorted.join(', ')}]</b>`;
-  }
-}
-
-function addSeenNum(n) {
-  seenNums[n] = (seenNums[n] || 0) + 1;
-  if (seenNums[n] > (n === 0 || n === 1 ? 1 : n)) {
-    seenNums[n] = (n === 0 || n === 1 ? 1 : n);  // cap to deck
-  }
-  refreshSeenNum(n);
-}
-function subSeenNum(n) {
-  if (seenNums[n] > 0) seenNums[n] -= 1;
-  refreshSeenNum(n);
-}
-function refreshSeenNum(n) {
-  const btn = document.getElementById('seen-num-' + n);
-  const c = seenNums[n] || 0;
-  btn.classList.toggle('active', c > 0);
-  btn.querySelector('.count').textContent = c > 0 ? c : '';
-}
-
-function addSeenSpecial(key) {
-  seenSpecials[key] = (seenSpecials[key] || 0) + 1;
-  // cap
-  const max = { bonus_flat: 5, bonus_double: 3, insurance: 3, exile: 3, triple: 3 }[key];
-  if (seenSpecials[key] > max) seenSpecials[key] = max;
-  refreshSeenSpecial(key);
-}
-function subSeenSpecial(key) {
-  if (seenSpecials[key] > 0) seenSpecials[key] -= 1;
-  refreshSeenSpecial(key);
-}
-function refreshSeenSpecial(key) {
-  const ids = {
-    bonus_flat: BONUS_FLAT_VALUES.map(v => 'seen-flat-' + v),
-    bonus_double: ['seen-double'],
-    insurance: ['seen-ins'],
-    exile: ['seen-exile'],
-    triple: ['seen-triple'],
-  };
-  // 加分牌 5 张面值，count 平均显示在每个按钮上
-  ids[key].forEach((id, i) => {
-    const btn = document.getElementById(id);
-    if (!btn) return;
-    const total = seenSpecials[key] || 0;
-    btn.classList.toggle('active', total > 0);
-    if (key === 'bonus_flat') {
-      // 不知道用户具体见过哪个面值，全部按 active 显示，count 显示总数在第一个
-      btn.querySelector('.count').textContent = (i === 0 && total > 0) ? total : '';
-    } else {
-      btn.querySelector('.count').textContent = total > 0 ? total : '';
-    }
-  });
-}
-
-// ============ 构建 state ============
-function buildRemaining() {
-  const rem = DeckCounts.full();
-  // 减自己手牌的数字
-  for (const v of myHand) rem.numbers[v] -= 1;
-  // 减自己的加分（按数量贪心推算）
-  const myBonus = parseInt(document.getElementById('my-bonus').value) || 0;
-  let needed = myBonus;
-  let myBonusFlatCount = 0;
-  for (const v of [10, 8, 6, 4, 2]) {
-    if (needed >= v) { myBonusFlatCount += 1; needed -= v; }
-  }
-  rem.bonus_flat -= myBonusFlatCount;
-  if (document.getElementById('my-double').checked) rem.bonus_double -= 1;
-  if (document.getElementById('my-insurance').checked) rem.insurance -= 1;
-  // 减已见
-  for (const [v, c] of Object.entries(seenNums)) rem.numbers[v] -= c;
-  rem.bonus_flat -= seenSpecials.bonus_flat;
-  rem.bonus_double -= seenSpecials.bonus_double;
-  rem.insurance -= seenSpecials.insurance;
-  rem.exile -= seenSpecials.exile;
-  rem.triple -= seenSpecials.triple;
-
-  // 防负
-  const issues = [];
-  for (let v = 0; v <= 12; v++) {
-    if (rem.numbers[v] < 0) {
-      issues.push(`数字 ${v} 多算了 ${-rem.numbers[v]} 张`);
-      rem.numbers[v] = 0;
-    }
-  }
-  for (const k of ['bonus_flat', 'bonus_double', 'insurance', 'exile', 'triple']) {
-    if (rem[k] < 0) {
-      issues.push(`${k} 多算了 ${-rem[k]} 张`);
-      rem[k] = 0;
-    }
-  }
-  return { rem, issues, myBonusFlatCount };
-}
-
-// ============ 分析 ============
-function analyze() {
-  const { rem, issues } = buildRemaining();
-  const myBonus = parseInt(document.getElementById('my-bonus').value) || 0;
-  const myTotal = parseInt(document.getElementById('my-total').value) || 0;
-  const target = parseInt(document.getElementById('target').value) || 200;
-  const numPlayers = parseInt(document.getElementById('num-players').value) || 4;
-  const hasInsurance = document.getElementById('my-insurance').checked;
-
-  // 构 state（其他玩家粗暴当 active 总分 0；advisor 主要看自己决策）
-  const cfg = new GameConfig({ numPlayers, targetScore: target });
-  const me = new PlayerState(0);
-  me.totalScore = myTotal;
-  me.handNumbers = myHand.slice();
-  me.bonusFlatTotal = myBonus;
-  me.hasInsurance = hasInsurance;
-  me.status = PlayerStatus.ACTIVE;
-  const others = [];
-  for (let i = 1; i < numPlayers; i++) {
+// ============================================================ 初始化
+function newState(targetScore = 200) {
+  const cfg = new GameConfig({ numPlayers: NUM_PLAYERS, targetScore });
+  const players = [];
+  for (let i = 0; i < NUM_PLAYERS; i++) {
     const p = new PlayerState(i);
     p.status = PlayerStatus.ACTIVE;
-    others.push(p);
+    players.push(p);
   }
-  const state = new GameState(cfg, [me, ...others], rem);
+  return new GameState(cfg, players, DeckCounts.full());
+}
 
-  // 概率分解
-  const total = Math.max(rem.total(), 1);
-  const handSet = me.uniqueNumbers;
-  const nUnique = handSet.size;
-  const curScore = myHand.reduce((s, v) => s + v, 0) + myBonus;
-
-  let bustCount = 0;
-  for (const v of handSet) bustCount += rem.numbers[v];
-  let safeCount = 0;
-  let safeSum = 0;
-  for (let v = 0; v <= 12; v++) {
-    if (!handSet.has(v)) { safeCount += rem.numbers[v]; safeSum += v * rem.numbers[v]; }
+function reset(keepTotals = false) {
+  const target = parseInt(document.getElementById('target-input').value) || 200;
+  const oldTotals = keepTotals ? state.players.map(p => p.totalScore) : null;
+  const oldRound = keepTotals ? state.roundNumber : 0;
+  state = newState(target);
+  if (oldTotals) {
+    state.players.forEach((p, i) => { p.totalScore = oldTotals[i]; });
+    state.roundNumber = oldRound + 1;
   }
-  const pBust = bustCount / total;
-  const pSafe = safeCount / total;
-  const pSix = nUnique === 5 ? pSafe : 0;
-  const pContSafe = nUnique < 5 ? pSafe : 0;
-  const avgSafeValue = safeCount > 0 ? safeSum / safeCount : 0;
+  activeIdx = 0;
+  history = [];
+  logEntries = [];
+  render();
+}
 
-  const pFlat = rem.bonus_flat / total;
-  const pDouble = rem.bonus_double / total;
-  const pIns = rem.insurance / total;
-  const pExile = rem.exile / total;
-  const pTriple = rem.triple / total;
+function snapshot() {
+  return {
+    deck: { ...state.remaining.numbers },
+    deckBonus: {
+      bonus_flat: state.remaining.bonus_flat,
+      bonus_double: state.remaining.bonus_double,
+      insurance: state.remaining.insurance,
+      exile: state.remaining.exile,
+      triple: state.remaining.triple,
+    },
+    players: state.players.map(p => ({
+      hand: p.handNumbers.slice(),
+      bonus: p.bonusFlatTotal,
+      ins: p.hasInsurance,
+      total: p.totalScore,
+      lock: p.lockedRoundScore,
+      status: p.status,
+    })),
+    activeIdx,
+    roundNumber: state.roundNumber,
+    logs: logEntries.slice(),
+  };
+}
 
-  // EV 估算
-  const evFold = curScore;
-  let evDraw = 0;
-  evDraw += pBust * (hasInsurance ? curScore : 0);
-  evDraw += pContSafe * (curScore + avgSafeValue);
-  evDraw += pSix * (curScore + avgSafeValue + 15);
-  evDraw += pFlat * (curScore + BONUS_FLAT_AVG);
-  evDraw += pDouble * (curScore + myHand.reduce((s, v) => s + v, 0));
-  evDraw += (pIns + pExile + pTriple) * (curScore + 5);
+function restore(snap) {
+  state.remaining.numbers = { ...snap.deck };
+  Object.assign(state.remaining, snap.deckBonus);
+  snap.players.forEach((s, i) => {
+    const p = state.players[i];
+    p.handNumbers = s.hand.slice();
+    p.bonusFlatTotal = s.bonus;
+    p.hasInsurance = s.ins;
+    p.totalScore = s.total;
+    p.lockedRoundScore = s.lock;
+    p.status = s.status;
+  });
+  activeIdx = snap.activeIdx;
+  state.roundNumber = snap.roundNumber;
+  logEntries = snap.logs.slice();
+}
 
-  // 调真正的 expectimax
-  const expectimax = new ExpectimaxAgent(3);
-  let exDecision;
+function pushHistory() {
+  history.push(snapshot());
+  if (history.length > 100) history.shift();
+}
+
+function undo() {
+  if (history.length === 0) return;
+  const snap = history.pop();
+  restore(snap);
+  render();
+}
+
+// ============================================================ 应用抽牌
+function applyDraw(playerIdx, cardKind, cardValue = null) {
+  const p = state.players[playerIdx];
+  if (!p.isActive) {
+    addLog(`⚠ P${playerIdx} 已不活跃，无法抽牌`, 'warn');
+    return;
+  }
+  pushHistory();
+
+  // 减牌库
+  if (cardKind === CardKind.NUMBER) {
+    if (state.remaining.numbers[cardValue] <= 0) {
+      addLog(`⚠ 数字 ${cardValue} 已抽光（输入与牌库矛盾）`, 'warn');
+      history.pop();  // 撤销 push
+      return;
+    }
+    state.remaining.numbers[cardValue] -= 1;
+    handleNumberDraw(playerIdx, cardValue);
+  } else if (cardKind === CardKind.BONUS_FLAT) {
+    if (state.remaining.bonus_flat <= 0) { warn('加分牌已抽光'); history.pop(); return; }
+    state.remaining.bonus_flat -= 1;
+    p.bonusFlatTotal += cardValue;
+    addLog(`P${playerIdx}${meTag(playerIdx)} 抽到加分牌 +${cardValue}`, 'bonus', playerIdx);
+  } else if (cardKind === CardKind.BONUS_DOUBLE) {
+    if (state.remaining.bonus_double <= 0) { warn('翻倍牌已抽光'); history.pop(); return; }
+    state.remaining.bonus_double -= 1;
+    const handSum = p.handNumbers.reduce((s, v) => s + v, 0);
+    p.bonusFlatTotal += handSum;
+    addLog(`P${playerIdx}${meTag(playerIdx)} 抽到翻倍牌（数字总和翻倍 +${handSum}）`, 'bonus', playerIdx);
+  } else if (cardKind === CardKind.INSURANCE) {
+    if (state.remaining.insurance <= 0) { warn('保险牌已抽光'); history.pop(); return; }
+    state.remaining.insurance -= 1;
+    if (!p.hasInsurance) {
+      p.hasInsurance = true;
+      addLog(`P${playerIdx}${meTag(playerIdx)} 获得保险 🛡`, 'skill', playerIdx);
+    } else {
+      // 强制送给其他活跃玩家
+      const candidates = state.players.filter(o => o.isActive && o.index !== playerIdx);
+      if (candidates.length === 0) {
+        addLog(`P${playerIdx} 重复保险且无可送对象，作废`, 'skill', playerIdx);
+      } else {
+        promptTarget(candidates, '保险已被你拿过，必须转送给：', (target) => {
+          state.players[target].hasInsurance = true;
+          addLog(`P${playerIdx}${meTag(playerIdx)} 强制送保险 → P${target}`, 'skill', playerIdx);
+          afterAction();
+        });
+        return; // promptTarget 是异步的，先不调 afterAction
+      }
+    }
+  } else if (cardKind === CardKind.EXILE) {
+    if (state.remaining.exile <= 0) { warn('放逐牌已抽光'); history.pop(); return; }
+    state.remaining.exile -= 1;
+    const candidates = state.players.filter(o => o.isActive);
+    if (candidates.length === 0) {
+      addLog(`放逐作废（无目标）`, 'skill', playerIdx);
+    } else {
+      promptTarget(candidates, `${meTag(playerIdx)} 抽到放逐牌，目标是：`, (target) => {
+        const victim = state.players[target];
+        victim.lockedRoundScore = victim.handNumbers.reduce((s, v) => s + v, 0) + victim.bonusFlatTotal;
+        victim.status = PlayerStatus.EXILED;
+        addLog(`P${playerIdx}${meTag(playerIdx)} 放逐 P${target}（锁 ${victim.lockedRoundScore} 分）`, 'skill', playerIdx);
+        afterAction();
+      });
+      return;
+    }
+  } else if (cardKind === CardKind.TRIPLE) {
+    if (state.remaining.triple <= 0) { warn('三连牌已抽光'); history.pop(); return; }
+    state.remaining.triple -= 1;
+    const candidates = state.players.filter(o => o.isActive);
+    if (candidates.length === 0) {
+      addLog(`三连作废（无目标）`, 'skill', playerIdx);
+    } else {
+      promptTarget(candidates, `${meTag(playerIdx)} 抽到三连牌，目标是（连摸 3 张，请逐张点）：`, (target) => {
+        addLog(`P${playerIdx}${meTag(playerIdx)} 三连 → P${target}（接下来手动给 P${target} 点 3 张）`, 'skill', playerIdx);
+        // 切换 active 到 target，让用户手动点 3 张
+        activeIdx = target;
+        afterAction();
+      });
+      return;
+    }
+  }
+  afterAction();
+}
+
+function handleNumberDraw(playerIdx, value) {
+  const p = state.players[playerIdx];
+  if (p.handNumbers.includes(value)) {
+    // 重复 → 爆牌或保险消耗
+    if (p.hasInsurance) {
+      p.hasInsurance = false;
+      addLog(`P${playerIdx}${meTag(playerIdx)} 抽到重复 ${value}，消耗保险免爆`, 'skill', playerIdx);
+    } else {
+      p.handNumbers = [];
+      p.bonusFlatTotal = 0;
+      p.lockedRoundScore = 0;
+      p.status = PlayerStatus.BUSTED;
+      addLog(`P${playerIdx}${meTag(playerIdx)} 💥 爆牌！抽到重复 ${value}，本局得分归零`, 'bust', playerIdx);
+    }
+    return;
+  }
+  p.handNumbers.push(value);
+  addLog(`P${playerIdx}${meTag(playerIdx)} 抽到数字 ${value}`, '', playerIdx);
+  // 6 翻
+  if (new Set(p.handNumbers).size >= 6) {
+    const cur = p.handNumbers.reduce((s, v) => s + v, 0) + p.bonusFlatTotal;
+    p.lockedRoundScore = cur + 15;
+    p.status = PlayerStatus.FOLDED;
+    p.totalScore += p.lockedRoundScore;
+    // 其他活跃玩家强制锁分
+    state.players.forEach(o => {
+      if (o.index !== playerIdx && o.status === PlayerStatus.ACTIVE) {
+        o.lockedRoundScore = o.handNumbers.reduce((s, v) => s + v, 0) + o.bonusFlatTotal;
+        o.totalScore += o.lockedRoundScore;
+        o.status = PlayerStatus.FOLDED;
+      }
+    });
+    addLog(`🚀 P${playerIdx}${meTag(playerIdx)} 6翻了！锁 ${p.lockedRoundScore} 分，全场强制结算`, 'six', playerIdx);
+  }
+}
+
+function fold(playerIdx) {
+  const p = state.players[playerIdx];
+  if (!p.isActive) return;
+  pushHistory();
+  p.lockedRoundScore = p.handNumbers.reduce((s, v) => s + v, 0) + p.bonusFlatTotal;
+  p.status = PlayerStatus.FOLDED;
+  p.totalScore += p.lockedRoundScore;
+  addLog(`P${playerIdx}${meTag(playerIdx)} 🔒 跑路，锁 ${p.lockedRoundScore} 分`, 'skill', playerIdx);
+  afterAction();
+}
+
+function bust(playerIdx) {
+  const p = state.players[playerIdx];
+  if (!p.isActive) return;
+  pushHistory();
+  p.handNumbers = [];
+  p.bonusFlatTotal = 0;
+  p.lockedRoundScore = 0;
+  p.status = PlayerStatus.BUSTED;
+  addLog(`P${playerIdx}${meTag(playerIdx)} 💥 标记爆牌出局`, 'bust', playerIdx);
+  afterAction();
+}
+
+function nextRound() {
+  // 把 round-only 字段清空，保留 totalScore
+  pushHistory();
+  state.roundNumber += 1;
+  state.players.forEach(p => {
+    p.handNumbers = [];
+    p.bonusFlatTotal = 0;
+    p.hasInsurance = false;
+    p.lockedRoundScore = 0;
+    p.status = PlayerStatus.ACTIVE;
+  });
+  state.remaining = DeckCounts.full();
+  activeIdx = 0;
+  addLog(`━━━ 进入第 ${state.roundNumber} 局 ━━━`, '');
+  render();
+}
+
+function afterAction() {
+  // 自动切换 active：如果当前 active 已不活跃，找下一个
+  if (!state.players[activeIdx].isActive) {
+    for (let off = 1; off < NUM_PLAYERS; off++) {
+      const nxt = (activeIdx + off) % NUM_PLAYERS;
+      if (state.players[nxt].isActive) { activeIdx = nxt; break; }
+    }
+  }
+  render();
+}
+
+// ============================================================ 推荐
+function computeReco() {
+  const me = state.players[activeIdx];
+  if (!me.isActive) {
+    return { html: `<div class="verdict">P${activeIdx} 已不活跃</div><div class="reason">点击其他玩家切换活跃</div>`,
+             cls: '', emoji: '⏸' };
+  }
+  const target = state.config.targetScore;
+  const cur = me.handNumbers.reduce((s, v) => s + v, 0) + me.bonusFlatTotal;
+
+  // 跑路即赢
+  if (me.totalScore + cur >= target) {
+    return {
+      html: `<div class="verdict">🏆 跑路立刻获胜</div><div class="reason">总分 ${me.totalScore} + 本局 ${cur} = ${me.totalScore + cur} ≥ 目标 ${target}</div>`,
+      cls: '', emoji: '🏆',
+    };
+  }
+
+  // 调 expectimax
+  let decision;
   try {
-    exDecision = expectimax.chooseAction(state, 0);
+    const ex = new ExpectimaxAgent(3);
+    decision = ex.chooseAction(state, activeIdx);
   } catch (e) {
     console.error(e);
-    exDecision = evDraw > evFold ? 'draw' : 'fold';
+    decision = 'fold';
+  }
+
+  // 概率细节
+  const total = Math.max(state.remaining.total(), 1);
+  const handSet = me.uniqueNumbers;
+  let bustC = 0; for (const v of handSet) bustC += state.remaining.numbers[v];
+  const pBust = bustC / total * 100;
+
+  let safeC = 0;
+  for (let v = 0; v <= 12; v++) if (!handSet.has(v)) safeC += state.remaining.numbers[v];
+  const pSafe = safeC / total * 100;
+  const pSix = handSet.size === 5 ? pSafe : 0;
+
+  // EV 估算
+  const evFold = cur;
+  let evDraw = 0;
+  evDraw += (bustC / total) * (me.hasInsurance ? cur : 0);
+  if (handSet.size < 5) {
+    let safeSum = 0;
+    for (let v = 0; v <= 12; v++) if (!handSet.has(v)) safeSum += v * state.remaining.numbers[v];
+    const avgSafe = safeC > 0 ? safeSum / safeC : 0;
+    evDraw += (safeC / total) * (cur + avgSafe);
+  } else if (handSet.size === 5) {
+    let safeSum = 0;
+    for (let v = 0; v <= 12; v++) if (!handSet.has(v)) safeSum += v * state.remaining.numbers[v];
+    const avgSafe = safeC > 0 ? safeSum / safeC : 0;
+    evDraw += (safeC / total) * (cur + avgSafe + 15);
+  }
+  evDraw += (state.remaining.bonus_flat / total) * (cur + BONUS_FLAT_AVG);
+  evDraw += (state.remaining.bonus_double / total) * (cur + me.handNumbers.reduce((s, v) => s + v, 0));
+  evDraw += ((state.remaining.insurance + state.remaining.exile + state.remaining.triple) / total) * (cur + 5);
+
+  let cls = '';
+  let emoji = '🎲';
+  let verdict;
+  let reason;
+  if (decision === 'draw') {
+    verdict = '🎲 继续摸牌';
+    reason = `爆牌 ${pBust.toFixed(0)}%`;
+    if (handSet.size === 5) reason += ` · 6翻概率 ${pSix.toFixed(0)}% 🚀`;
+    reason += ` · 跑路只能锁 ${cur} 分`;
+  } else {
+    verdict = '🔒 跑路（锁分）';
+    cls = 'fold';
+    emoji = '🔒';
+    reason = `继续摸 EV=${evDraw.toFixed(1)}, 跑路 EV=${evFold.toFixed(1)}`;
+    if (pBust > 35) { cls = 'danger'; emoji = '⚠'; reason = `⚠ 高风险 爆牌 ${pBust.toFixed(0)}%，` + reason; }
   }
 
   return {
-    issues, totalRemaining: total, nUnique, curScore, hasInsurance,
-    myTotal, target,
-    pBust: pBust * 100, pSafe: pSafe * 100, pSix: pSix * 100, avgSafeValue,
-    pFlat: pFlat * 100, pDouble: pDouble * 100,
-    pIns: pIns * 100, pExile: pExile * 100, pTriple: pTriple * 100,
-    evDraw, evFold, exDecision,
-    handSum: myHand.reduce((s, v) => s + v, 0),
+    html: `<div class="verdict">${verdict}</div><div class="reason">${reason}</div>`,
+    cls, emoji,
+    evHTML: `<div class="ev">EV摸 ${evDraw.toFixed(1)}<br>EV跑 ${evFold.toFixed(1)}</div>`,
+    pBust, pSix, pSafe,
   };
 }
 
-// ============ 渲染结果 ============
-function render(a) {
-  document.getElementById('result').hidden = false;
-  // 状态摘要
-  const summaryDiv = document.getElementById('state-summary');
-  const handStr = myHand.length ? myHand.slice().sort((x,y)=>x-y).join(', ') : '空';
-  summaryDiv.innerHTML = `
-    <div>剩余牌库 <b>${a.totalRemaining}</b> 张</div>
-    <div>手牌 <b>[${handStr}]</b> · 加分 <b>+${a.curScore - a.handSum}</b> · 不同数字 <b>${a.nUnique}</b> 个</div>
-    <div>本局已得 <b>${a.curScore}</b> · 总分 <b>${a.myTotal} / ${a.target}</b> · 保险 <b>${a.hasInsurance ? '有 🛡' : '无'}</b></div>
-  `;
+// ============================================================ 渲染
+function render() {
+  const target = state.config.targetScore;
+  document.getElementById('round-num').textContent = state.roundNumber;
+  document.getElementById('target-display').textContent = target;
+  document.getElementById('deck-remaining').textContent = state.remaining.total();
+  document.getElementById('active-name').textContent = activeIdx === 0 ? `P0（你）` : `P${activeIdx}`;
 
-  // banners
-  const bannerDiv = document.getElementById('banners');
-  bannerDiv.innerHTML = '';
-  if (a.issues.length > 0) {
-    bannerDiv.innerHTML += `<div class="warning-banner">⚠ 输入与牌库矛盾：${a.issues.join('；')}</div>`;
-  }
-  if (a.myTotal + a.curScore >= a.target) {
-    bannerDiv.innerHTML += `<div class="winning-banner">🏆 现在跑路 锁 ${a.curScore} 分即可获胜！</div>`;
-  }
-  if (a.pBust > 35) {
-    bannerDiv.innerHTML += `<div class="warning-banner">⚠ 高风险：爆牌概率 ${a.pBust.toFixed(0)}%，强烈建议跑路</div>`;
-  }
-
-  // 概率分解
-  const probDiv = document.getElementById('prob-detail');
-  probDiv.innerHTML = '';
-  const cls = (p, low, mid) => p < low ? 'safe' : p < mid ? 'warn' : 'danger';
-  const rows = [];
-  rows.push({
-    emoji: '💥', label: '爆牌', pct: a.pBust, cls: cls(a.pBust, 15, 30),
-    note: a.hasInsurance ? '有保险，免一次' : `本局 ${a.curScore} 分归零`,
-  });
-  if (a.nUnique < 5) {
-    rows.push({
-      emoji: '✅', label: '安全数字', pct: a.pSafe, cls: 'safe',
-      note: `平均 +${a.avgSafeValue.toFixed(1)} 分`,
-    });
-  } else if (a.nUnique === 5) {
-    rows.push({
-      emoji: '🚀', label: '6 翻终结', pct: a.pSix, cls: a.pSix > 50 ? 'safe' : 'warn',
-      note: '+15 奖励 + 全场强制结算',
-    });
-  }
-  rows.push({ emoji: '🟢', label: '加分牌（平均 +6）', pct: a.pFlat, cls: 'safe', note: '+2/+4/+6/+8/+10' });
-  rows.push({ emoji: '🟢', label: '翻倍', pct: a.pDouble, cls: 'safe', note: `+${a.handSum} 分` });
-  rows.push({ emoji: '🛡', label: '保险', pct: a.pIns, cls: 'safe', note: '免一次爆牌' });
-  rows.push({ emoji: '🚷', label: '放逐', pct: a.pExile, cls: 'safe', note: '强制目标跑路' });
-  rows.push({ emoji: '⚡', label: '三连', pct: a.pTriple, cls: 'safe', note: '强制连摸 3 张' });
-
-  rows.forEach(r => {
-    const el = document.createElement('div');
-    el.className = 'prob-row ' + r.cls;
-    el.innerHTML = `
-      <span>${r.emoji}</span>
-      <span>${r.label}</span>
-      <span class="pct">${r.pct.toFixed(1)}%</span>
-      <span class="note">${r.note}</span>
-    `;
-    probDiv.appendChild(el);
-  });
-
-  // EV 对比
-  const evDiv = document.getElementById('ev-compare');
-  const drawWins = a.evDraw > a.evFold;
-  evDiv.innerHTML = `
-    <div class="ev-card ${drawWins ? 'win' : 'lose'}">
-      <div class="label">EV(继续摸)</div>
-      <div class="value ${drawWins ? 'win' : ''}">${a.evDraw.toFixed(1)}</div>
-    </div>
-    <div class="ev-card ${!drawWins ? 'win' : 'lose'}">
-      <div class="label">EV(跑路)</div>
-      <div class="value ${!drawWins ? 'win' : ''}">${a.evFold.toFixed(1)}</div>
-    </div>
-  `;
+  // 玩家网格
+  const grid = document.getElementById('players');
+  grid.innerHTML = '';
+  state.players.forEach(p => grid.appendChild(renderPlayer(p)));
 
   // 推荐
-  const recDiv = document.getElementById('recommend');
-  if (a.exDecision === 'draw') {
-    recDiv.innerHTML = `
-      <div class="recommend">
-        <div class="verdict">🎲 继续摸牌</div>
-        <div class="reason">Expectimax depth=3 计算后建议</div>
-      </div>
-    `;
-  } else {
-    recDiv.innerHTML = `
-      <div class="recommend fold">
-        <div class="verdict">🔒 跑路锁分</div>
-        <div class="reason">Expectimax depth=3 计算后建议（锁定 ${a.curScore} 分）</div>
-      </div>
-    `;
-  }
+  const reco = computeReco();
+  const recoEl = document.getElementById('reco');
+  recoEl.className = 'reco ' + (reco.cls || '');
+  recoEl.innerHTML = `
+    <div style="font-size:32px">${reco.emoji}</div>
+    <div>${reco.html}</div>
+    <div>${reco.evHTML || ''}</div>
+  `;
+
+  // 牌按钮
+  renderCardGrid();
+
+  // 概率细节
+  renderProbs(reco);
+
+  // 历史日志
+  renderLog();
 }
 
-// ============ 入口 ============
+function renderPlayer(p) {
+  const el = document.createElement('div');
+  el.className = `player status-${p.status}`;
+  if (p.index === activeIdx) el.classList.add('active');
+  if (p.index === 0) el.classList.add('is-me');
+
+  const emoji = { active: '🎲', folded: '🔒', busted: '💥', exiled: '🚷' }[p.status] || '';
+  const name = p.index === 0 ? '★ 你' : `P${p.index}`;
+  const cur = p.currentRoundScore();
+  const handStr = p.handNumbers.length
+    ? p.handNumbers.slice().sort((a, b) => a - b).join(',')
+    : '-';
+
+  el.innerHTML = `
+    <div class="p-head">
+      <span class="p-name">${name}</span>
+      <span class="p-emoji">${emoji}</span>
+    </div>
+    <div class="p-total">${p.totalScore}</div>
+    <div class="p-line">本局 +${cur}${p.bonusFlatTotal ? `<span class="p-bonus">+${p.bonusFlatTotal}</span>` : ''}${p.hasInsurance ? '<span class="p-ins">🛡</span>' : ''}</div>
+    <div class="p-hand">[${handStr}]</div>
+  `;
+
+  el.addEventListener('click', () => {
+    if (!p.isActive) return;
+    activeIdx = p.index;
+    render();
+  });
+
+  return el;
+}
+
+function renderCardGrid() {
+  const me = state.players[activeIdx];
+  const handSet = me.isActive ? new Set(me.handNumbers) : new Set();
+
+  // 数字 0-12
+  const numGrid = document.getElementById('num-grid');
+  numGrid.innerHTML = '';
+  for (let v = 0; v <= 12; v++) {
+    const left = state.remaining.numbers[v];
+    const btn = document.createElement('button');
+    btn.className = 'draw-btn';
+    if (handSet.has(v)) btn.classList.add('in-hand');
+    if (left <= 0) btn.classList.add('depleted');
+    btn.disabled = left <= 0 || !me.isActive;
+    btn.innerHTML = `${v}<span class="left">${left}</span>`;
+    btn.addEventListener('click', () => applyDraw(activeIdx, CardKind.NUMBER, v));
+    numGrid.appendChild(btn);
+  }
+
+  // 特殊牌
+  const specials = [
+    { kind: CardKind.BONUS_FLAT, label: '+2', val: 2, count: () => state.remaining.bonus_flat },
+    { kind: CardKind.BONUS_FLAT, label: '+4', val: 4, count: () => state.remaining.bonus_flat },
+    { kind: CardKind.BONUS_FLAT, label: '+6', val: 6, count: () => state.remaining.bonus_flat },
+    { kind: CardKind.BONUS_FLAT, label: '+8', val: 8, count: () => state.remaining.bonus_flat },
+    { kind: CardKind.BONUS_FLAT, label: '+10', val: 10, count: () => state.remaining.bonus_flat },
+    { kind: CardKind.BONUS_DOUBLE, label: '×2', val: null, count: () => state.remaining.bonus_double },
+    { kind: CardKind.INSURANCE, label: '🛡保险', val: null, count: () => state.remaining.insurance },
+    { kind: CardKind.EXILE, label: '🚷放逐', val: null, count: () => state.remaining.exile },
+    { kind: CardKind.TRIPLE, label: '⚡三连', val: null, count: () => state.remaining.triple },
+  ];
+  const sg = document.getElementById('special-grid');
+  sg.innerHTML = '';
+  specials.forEach(s => {
+    const left = s.count();
+    const btn = document.createElement('button');
+    btn.className = 'draw-btn special-tile';
+    if (left <= 0) btn.classList.add('depleted');
+    btn.disabled = left <= 0 || !me.isActive;
+    btn.innerHTML = `${s.label}<span class="left">${left}</span>`;
+    btn.addEventListener('click', () => applyDraw(activeIdx, s.kind, s.val));
+    sg.appendChild(btn);
+  });
+}
+
+function renderProbs(reco) {
+  const panel = document.getElementById('probs-panel');
+  const me = state.players[activeIdx];
+  if (!me.isActive || !reco.pBust) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const total = Math.max(state.remaining.total(), 1);
+  const rem = state.remaining;
+
+  const probs = document.getElementById('probs');
+  const pFlat = (rem.bonus_flat / total * 100).toFixed(1);
+  const pDouble = (rem.bonus_double / total * 100).toFixed(1);
+  const pIns = (rem.insurance / total * 100).toFixed(1);
+  const pExile = (rem.exile / total * 100).toFixed(1);
+  const pTriple = (rem.triple / total * 100).toFixed(1);
+
+  const bustCls = reco.pBust > 30 ? 'danger' : reco.pBust > 15 ? 'warn' : '';
+  probs.innerHTML = `
+    <div class="row ${bustCls}"><span>💥 爆牌</span><b>${reco.pBust.toFixed(1)}%</b></div>
+    <div class="row"><span>${me.uniqueNumbers.size === 5 ? '🚀 6翻终结' : '✅ 安全数字'}</span><b>${(me.uniqueNumbers.size === 5 ? reco.pSix : reco.pSafe).toFixed(1)}%</b></div>
+    <div class="row"><span>🟢 加分牌（平均 +6）</span><b>${pFlat}%</b></div>
+    <div class="row"><span>🟢 翻倍</span><b>${pDouble}%</b></div>
+    <div class="row"><span>🛡 保险</span><b>${pIns}%</b></div>
+    <div class="row"><span>🚷 放逐</span><b>${pExile}%</b></div>
+    <div class="row"><span>⚡ 三连</span><b>${pTriple}%</b></div>
+  `;
+}
+
+function renderLog() {
+  const ul = document.getElementById('event-log');
+  ul.innerHTML = '';
+  logEntries.slice(-30).forEach(e => {
+    const div = document.createElement('div');
+    div.className = 'entry ' + (e.cls || '') + (e.isMe ? ' is-me' : '');
+    div.textContent = `R${state.roundNumber}  ${e.text}`;
+    ul.appendChild(div);
+  });
+  ul.scrollTop = ul.scrollHeight;
+}
+
+// ============================================================ 工具
+function meTag(idx) { return idx === 0 ? '（你）' : ''; }
+
+function addLog(text, cls = '', playerIdx = -1) {
+  logEntries.push({ text, cls, isMe: playerIdx === 0 });
+}
+
+function warn(msg) {
+  addLog(`⚠ ${msg}`, 'warn');
+  console.warn(msg);
+}
+
+// ============================================================ 模态选目标
+function promptTarget(candidates, msg, onPick) {
+  const choices = candidates.map(p => p.index === 0 ? '0 (你)' : `${p.index}`).join(' / ');
+  // 简单 prompt（可改为 modal）
+  const input = window.prompt(`${msg}\n选项: ${choices}\n输入玩家编号：`);
+  if (input === null) return;
+  const idx = parseInt(input.trim());
+  if (candidates.some(p => p.index === idx)) onPick(idx);
+  else { warn(`无效目标 ${input}`); render(); }
+}
+
+// ============================================================ 入口
 document.addEventListener('DOMContentLoaded', () => {
-  buildPickers();
-  refreshMyHand();
-  document.getElementById('analyze-btn').addEventListener('click', () => {
-    try {
-      const a = analyze();
-      render(a);
-      document.getElementById('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } catch (e) {
-      console.error(e);
-      alert('分析失败：' + (e.message || e));
-    }
+  reset();
+  document.getElementById('action-fold').addEventListener('click', () => fold(activeIdx));
+  document.getElementById('action-bust').addEventListener('click', () => bust(activeIdx));
+  document.getElementById('undo-btn').addEventListener('click', undo);
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    if (confirm('确定重置所有状态（包括总分）？')) reset(false);
+  });
+  document.getElementById('next-round-btn').addEventListener('click', nextRound);
+  document.getElementById('target-input').addEventListener('change', () => {
+    state.config.targetScore = parseInt(document.getElementById('target-input').value) || 200;
+    render();
   });
 });
