@@ -28,6 +28,9 @@ html, body {
   min-height: 100vh;
 }
 
+/* HTML 'hidden' 属性优先级低于 .modal/.drawn-card 等 display 规则；强制隐藏 */
+[hidden] { display: none !important; }
+
 #app {
   max-width: 1100px;
   margin: 0 auto;
