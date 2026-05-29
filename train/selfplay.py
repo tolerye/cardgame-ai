@@ -295,6 +295,9 @@ def main() -> None:
                         help="path to existing model checkpoint to continue from")
     parser.add_argument("--device", default="cpu",
                         help="cpu / mps / cuda — 实测 30K 小网络 + batch=1 推理 CPU 通常更快")
+    parser.add_argument("--vectorized", type=int, default=0,
+                        help="vectorized 模式：N 个并发 game 同步推进 + batched GPU 推理。"
+                             "推荐 GPU 模式下用，配合 --device cuda --workers 0。0=关闭")
     args = parser.parse_args()
 
     import time
@@ -318,7 +321,19 @@ def main() -> None:
     buffer: list[TrainingExample] = []
     for it in range(args.iters):
         t0 = time.time()
-        if args.workers > 0:
+        if args.vectorized > 0:
+            from .vectorized_selfplay import vectorized_selfplay
+            new_examples = vectorized_selfplay(
+                model,
+                n_concurrent=args.vectorized,
+                n_sims=args.n_sims,
+                n_games_total=args.games_per_iter,
+                device=args.device,
+                verbose=False,
+                seed=it * 1000,
+            )
+            buffer.extend(new_examples)
+        elif args.workers > 0:
             new_examples = parallel_self_play(
                 model, n_workers=args.workers,
                 total_games=args.games_per_iter,

@@ -37,10 +37,23 @@ REPO = Path(__file__).resolve().parent
 CKPT_DIR = REPO / "checkpoints"
 CKPT_DIR.mkdir(exist_ok=True)
 
+# Windows: 强制 stdout/stderr 用 UTF-8，否则 emoji 报 GBK 编码错
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 
 def log(msg: str) -> None:
     ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    try:
+        print(f"[{ts}] {msg}", flush=True)
+    except UnicodeEncodeError:
+        # 兜底：剥掉 non-ASCII（emoji 等）
+        safe = msg.encode('ascii', 'replace').decode('ascii')
+        print(f"[{ts}] {safe}", flush=True)
 
 
 def run(cmd: list[str], capture: bool = False) -> tuple[int, str]:
@@ -70,6 +83,8 @@ def main() -> None:
                         help="低于 baseline 多少 pp 算退化")
     parser.add_argument("--no-resume", action="store_true", help="从随机权重起步")
     parser.add_argument("--device", default="cpu", help="cpu / mps / cuda")
+    parser.add_argument("--vectorized", type=int, default=0,
+                        help="vectorized 模式：N 个并发 game。GPU 训练推荐 16/32/64")
     parser.add_argument("--out", default="model.pt", help="模型输出路径")
     parser.add_argument("--ckpt-prefix", default="model_iter", help="checkpoint 前缀")
     args = parser.parse_args()
@@ -77,13 +92,13 @@ def main() -> None:
     log(f"start: {args.iters} iter @ {args.games} game/iter, {args.n_sims} sims, {args.workers} workers")
     log(f"eval every {args.eval_every} iter, baseline={args.baseline_raw}%")
 
-    # 备份起点
-    if not args.no_resume and (REPO / args.out).exists():
+    # 自动判断是否 resume：no-resume 显式传 OR model.pt 不存在 → 从头起步
+    if args.no_resume or not (REPO / args.out).exists():
+        args.no_resume = True
+        log(f"starting from scratch (no {args.out} found, or --no-resume)")
+    else:
         shutil.copy(REPO / args.out, CKPT_DIR / "model_overnight_start.pt")
         shutil.copy(REPO / args.out, CKPT_DIR / "model_best.pt")
-    else:
-        # 从头起步：把 best 标记成空（首次 eval 后写入）
-        log("starting from scratch (no --resume)")
 
     best_raw = args.baseline_raw
     low_streak = 0
@@ -102,6 +117,7 @@ def main() -> None:
             "--workers", str(args.workers),
             "--n-sims", str(args.n_sims),
             "--device", args.device,
+            "--vectorized", str(args.vectorized),
             "--out", args.out,
         ]
         # 第一批 + no-resume 时不传 --resume；之后每批都从上次的 out 续训
