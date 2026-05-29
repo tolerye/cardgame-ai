@@ -12,6 +12,9 @@ model.pt
 training.log
 *.log
 
+# Exception: 保留 v1 基线模型作为安全回滚点（170KB）
+!checkpoints/model_v1_baseline.pt
+
 # OS / editors
 .DS_Store
 .vscode/
