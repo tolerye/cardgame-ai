@@ -146,22 +146,70 @@ class NeuralMCTSAgent(BaseAgent):
         return max(-1.0, min(1.0, (me_total - others) / target))
 
 
+# ============================================================== reward shapes
+def _placement_targets(shape: str, final_totals: List[int], target_score: int) -> List[float]:
+    """根据 reward shape 计算每位玩家的 value 目标。
+
+    asym (默认)  : 1st=+1 / 2nd=-1/3 / 3rd=-2/3 / 4th=-1（赢家拿全部，避免守势）
+    sym          : 1st=+1 / 2nd=+1/3 / 3rd=-1/3 / 4th=-1（标准 AlphaZero 多玩家）
+    binary       : 1st=+1 / 其余=-1（最高方差但信号最纯）
+    margin       : 基于和最高分对手的差距，clip 到 [-1, 1]
+    """
+    n = len(final_totals)
+    if shape == 'margin':
+        out = [0.0] * n
+        for i, s in enumerate(final_totals):
+            others = max(t for j, t in enumerate(final_totals) if j != i)
+            out[i] = max(-1.0, min(1.0, (s - others) / target_score))
+        return out
+
+    rank = sorted(range(n), key=lambda i: -final_totals[i])
+    z = [0.0] * n
+    if shape == 'binary':
+        z[rank[0]] = 1.0
+        for j in rank[1:]: z[j] = -1.0
+        return z
+    if shape == 'sym':
+        values = [1.0, 1/3, -1/3, -1.0]
+    else:  # asym 默认
+        values = [1.0, -1/3, -2/3, -1.0]
+    for pos, idx in enumerate(rank):
+        z[idx] = values[pos] if pos < 4 else -1.0
+    return z
+
+
 # ============================================================== self-play
 def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
                    use_batched: bool = True, batch_size: int = 32,
-                   device: str = "cpu") -> List[TrainingExample]:
-    """Run a self-play match where all 4 seats use a Neural-MCTS agent.
+                   device: str = "cpu",
+                   adversarial: bool = False,
+                   reward_shape: str = 'asym') -> List[TrainingExample]:
+    """Run a self-play match.
 
-    use_batched=True (default) uses the much faster BatchedNeuralMCTSAgent
-    which collects leaf states across virtual-loss-spread sims and evaluates
-    them in a single batched forward pass."""
+    adversarial=False（默认）：4 个 NN-MCTS agent 互打（标准 AlphaZero self-play）
+    adversarial=True：1 个 NN-MCTS（席位 0）+ 3 个 ExpectimaxAgent depth=3
+                      只记录 NN 的决策；让 NN 学会打败强基线，而不是只跟自己平起平坐。
+
+    use_batched=True (default) 用 BatchedNeuralMCTSAgent 批量推理。
+    reward_shape: asym / sym / binary / margin（详见 _placement_targets）"""
     cfg = GameConfig(num_players=num_players)
-    if use_batched:
+    if adversarial:
         from agents.batched_mcts import BatchedNeuralMCTSAgent
-        # AlphaZero-style exploration during self-play: dirichlet noise at root,
-        # temperature=1 for visit-count sampling, plus hybrid leaf eval that
-        # blends NN value with handcrafted EV signal — the EV teacher accelerates
-        # value-head bootstrapping in the small-data regime.
+        from agents.expectimax_agent import ExpectimaxAgent as Exmax
+        # NN 在席位 0，3 个 exmax3 当陪练
+        nn_agent = BatchedNeuralMCTSAgent(model=model,
+                                           n_simulations=n_simulations,
+                                           batch_size=batch_size,
+                                           dirichlet_eps=0.25,
+                                           dirichlet_alpha=0.5,
+                                           temperature=1.0,
+                                           hybrid_alpha=0.5,
+                                           device=device)
+        agents = [nn_agent] + [Exmax(depth=3) for _ in range(num_players - 1)]
+        nn_indices = {0}
+    elif use_batched:
+        from agents.batched_mcts import BatchedNeuralMCTSAgent
+        # AlphaZero-style exploration during self-play.
         agents = [BatchedNeuralMCTSAgent(model=model,
                                           n_simulations=n_simulations,
                                           batch_size=batch_size,
@@ -171,43 +219,32 @@ def play_one_game(model, n_simulations: int = 100, num_players: int = 4,
                                           hybrid_alpha=0.5,
                                           device=device)
                    for _ in range(num_players)]
+        nn_indices = set(range(num_players))
     else:
         agents = [NeuralMCTSAgent(model=model, n_simulations=n_simulations,
                                    dirichlet_eps=0.25) for _ in range(num_players)]
+        nn_indices = set(range(num_players))
+
     engine = GameEngine(cfg, agents)
     pending: list[tuple[np.ndarray, np.ndarray, int]] = []  # (features, policy, my_idx)
 
-    # Wrap engine to record pre-action features and visit counts.
     orig_take = engine._take_turn
 
     def recording_take(idx: int):
-        if engine.state.players[idx].is_active:
+        if engine.state.players[idx].is_active and idx in nn_indices:
             x = encode_state(engine.state, idx)
             orig_take(idx)
-            pi = agents[idx]._last_visits
+            pi = getattr(agents[idx], '_last_visits', None)
             if pi is not None:
                 pending.append((x, np.array(pi, dtype=np.float32), idx))
         else:
             orig_take(idx)
 
-    engine._take_turn = recording_take  # monkey-patch
+    engine._take_turn = recording_take
     engine.play_match()
-    winner = engine.state.winner
-    # Placement-based value target (Petosa & Balch, Multiplayer AlphaZero):
-    # 1st → +1, 2nd → +1/3, 3rd → −1/3, 4th → −1.
-    # Lower variance than binary winner-takes-all and gives a learnable signal
-    # to all 4 players, not just the winner.
+
     final_totals = [p.total_score for p in engine.state.players]
-    rank = sorted(range(num_players), key=lambda i: -final_totals[i])  # idx by desc score
-    placement_z = [0.0] * num_players
-    # Asymmetric placement: only 1st place is "good", everyone else is bad.
-    # Rationale: the game is winner-takes-all (target_score 200), so optimizing
-    # for "avoid last place" (symmetric +1/+1/3/-1/3/-1) trains agents to fold
-    # for safety, never reaching the target. Asymmetric reward keeps lower
-    # variance than binary ±1 while pointing the value head at the right goal.
-    placement_values = [1.0, -1/3, -2/3, -1.0]
-    for pos, idx in enumerate(rank):
-        placement_z[idx] = placement_values[pos] if pos < 4 else -1.0
+    placement_z = _placement_targets(reward_shape, final_totals, cfg.target_score)
     examples: List[TrainingExample] = []
     for x, pi, idx in pending:
         examples.append(TrainingExample(features=x, policy=pi,
@@ -233,16 +270,19 @@ def train_step(model, optimizer, batch: List[TrainingExample], device: str = "cp
 
 # ============================================================ multiprocessing
 def _worker_play(weights_bytes: bytes, n_games: int, n_sims: int, seed: int,
-                  device: str = "cpu") -> List[TrainingExample]:
+                  device: str = "cpu",
+                  hidden: int = 128, n_layers: int = 3,
+                  adversarial: bool = False,
+                  reward_shape: str = 'asym') -> List[TrainingExample]:
     """Worker entry: rebuild model from serialized weights, play N games."""
     import io
     import random as _random
     import torch
-    torch.set_num_threads(1)  # workers shouldn't fight each other for CPU
+    torch.set_num_threads(1)
     _random.seed(seed)
     np.random.seed(seed & 0xFFFFFFFF)
     from .network import build_model
-    model = build_model()
+    model = build_model(hidden=hidden, n_layers=n_layers)
     model.load_state_dict(torch.load(io.BytesIO(weights_bytes), map_location="cpu"))
     if device != "cpu":
         try:
@@ -253,18 +293,21 @@ def _worker_play(weights_bytes: bytes, n_games: int, n_sims: int, seed: int,
     model.eval()
     out: List[TrainingExample] = []
     for _ in range(n_games):
-        out.extend(play_one_game(model, n_simulations=n_sims, device=device))
+        out.extend(play_one_game(model, n_simulations=n_sims, device=device,
+                                  adversarial=adversarial,
+                                  reward_shape=reward_shape))
     return out
 
 
 def parallel_self_play(model, n_workers: int, total_games: int, n_sims: int,
-                        base_seed: int = 0, device: str = "cpu") -> List[TrainingExample]:
+                        base_seed: int = 0, device: str = "cpu",
+                        adversarial: bool = False,
+                        reward_shape: str = 'asym') -> List[TrainingExample]:
     """Distribute `total_games` across `n_workers` spawn workers."""
     import io
     import multiprocessing as mp
     import torch
     buf = io.BytesIO()
-    # 保存到 CPU 字节流便于传给 worker
     cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
     torch.save(cpu_state, buf)
     weights = buf.getvalue()
@@ -273,8 +316,13 @@ def parallel_self_play(model, n_workers: int, total_games: int, n_sims: int,
     for i in range(total_games % n_workers):
         games_per[i] += 1
 
+    hidden = getattr(model, 'h', 128)
+    n_layers = getattr(model, 'layers', 3)
+
     ctx = mp.get_context("spawn")
-    args = [(weights, g, n_sims, base_seed + i, device) for i, g in enumerate(games_per) if g > 0]
+    args = [(weights, g, n_sims, base_seed + i, device,
+             hidden, n_layers, adversarial, reward_shape)
+            for i, g in enumerate(games_per) if g > 0]
     examples: List[TrainingExample] = []
     with ctx.Pool(processes=len(args)) as pool:
         for chunk in pool.starmap(_worker_play, args):
@@ -298,17 +346,38 @@ def main() -> None:
     parser.add_argument("--vectorized", type=int, default=0,
                         help="vectorized 模式：N 个并发 game 同步推进 + batched GPU 推理。"
                              "推荐 GPU 模式下用，配合 --device cuda --workers 0。0=关闭")
+    parser.add_argument("--hidden", type=int, default=128,
+                        help="网络隐藏层维度（默认 128，大网用 256）")
+    parser.add_argument("--n-layers", type=int, default=3,
+                        help="trunk 层数（默认 3，大网用 5）")
+    parser.add_argument("--adversarial", action="store_true",
+                        help="对抗微调：席位 0 是 NN，其余 3 席是 ExpectimaxAgent depth=3。"
+                             "只记录 NN 的决策训练。")
+    parser.add_argument("--reward-shape", default='asym',
+                        choices=['asym', 'sym', 'binary', 'margin'],
+                        help="value target 形状：asym (默认) / sym / binary / margin")
     args = parser.parse_args()
 
     import time
 
     import torch
-    from .network import build_model, save
+    from .network import build_model, save, infer_arch
 
-    model = build_model()
     if args.resume:
-        model.load_state_dict(torch.load(args.resume, map_location="cpu"))
-        print(f"Resumed from {args.resume}")
+        # 从 checkpoint 推断尺寸（除非显式覆盖）
+        state = torch.load(args.resume, map_location="cpu")
+        h, n = infer_arch(state)
+        if args.hidden != h or args.n_layers != n:
+            print(f"⚠ checkpoint 是 {h}h/{n}L，命令行给的 {args.hidden}h/{args.n_layers}L，"
+                  f"以 checkpoint 为准")
+            args.hidden, args.n_layers = h, n
+        model = build_model(hidden=args.hidden, n_layers=args.n_layers)
+        model.load_state_dict(state)
+        print(f"Resumed from {args.resume} ({args.hidden}h/{args.n_layers}L)")
+    else:
+        model = build_model(hidden=args.hidden, n_layers=args.n_layers)
+        print(f"Fresh model: {args.hidden}h/{args.n_layers}L, "
+              f"{sum(p.numel() for p in model.parameters())} params")
     if args.device != "cpu":
         try:
             model = model.to(args.device)
@@ -317,6 +386,9 @@ def main() -> None:
             print(f"⚠ failed to move model to {args.device}: {e}; falling back to cpu")
             args.device = "cpu"
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    print(f"Mode: {'ADVERSARIAL (1 NN + 3 exmax3)' if args.adversarial else 'self-play (4 NN)'}, "
+          f"reward={args.reward_shape}, sims={args.n_sims}, games/iter={args.games_per_iter}")
 
     buffer: list[TrainingExample] = []
     for it in range(args.iters):
@@ -340,12 +412,16 @@ def main() -> None:
                 n_sims=args.n_sims,
                 base_seed=it * 1000,
                 device=args.device,
+                adversarial=args.adversarial,
+                reward_shape=args.reward_shape,
             )
             buffer.extend(new_examples)
         else:
             for _ in range(args.games_per_iter):
                 buffer.extend(play_one_game(model, n_simulations=args.n_sims,
-                                              device=args.device))
+                                              device=args.device,
+                                              adversarial=args.adversarial,
+                                              reward_shape=args.reward_shape))
         sp_time = time.time() - t0
         # sample
         if len(buffer) > 8192:

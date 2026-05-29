@@ -87,6 +87,13 @@ def main() -> None:
                         help="vectorized 模式：N 个并发 game。GPU 训练推荐 16/32/64")
     parser.add_argument("--out", default="model.pt", help="模型输出路径")
     parser.add_argument("--ckpt-prefix", default="model_iter", help="checkpoint 前缀")
+    parser.add_argument("--hidden", type=int, default=128, help="网络隐藏层维度")
+    parser.add_argument("--n-layers", type=int, default=3, help="trunk 层数")
+    parser.add_argument("--adversarial", action="store_true",
+                        help="对抗微调：1 NN + 3 exmax3")
+    parser.add_argument("--reward-shape", default='asym',
+                        choices=['asym', 'sym', 'binary', 'margin'],
+                        help="value target 形状")
     args = parser.parse_args()
 
     log(f"start: {args.iters} iter @ {args.games} game/iter, {args.n_sims} sims, {args.workers} workers")
@@ -118,8 +125,13 @@ def main() -> None:
             "--n-sims", str(args.n_sims),
             "--device", args.device,
             "--vectorized", str(args.vectorized),
+            "--hidden", str(args.hidden),
+            "--n-layers", str(args.n_layers),
+            "--reward-shape", args.reward_shape,
             "--out", args.out,
         ]
+        if args.adversarial:
+            cmd.append("--adversarial")
         # 第一批 + no-resume 时不传 --resume；之后每批都从上次的 out 续训
         if not (batch == 0 and args.no_resume):
             cmd += ["--resume", args.out]

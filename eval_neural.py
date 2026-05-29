@@ -22,9 +22,11 @@ AGENT_NAMES = ("neural", "expectimax", "ev", "greedy")
 
 def _build_agents(weights_bytes: bytes, use_mcts: bool, n_sims: int):
     import torch
-    from train.network import build_model
-    model = build_model()
-    model.load_state_dict(torch.load(io.BytesIO(weights_bytes), map_location="cpu"))
+    from train.network import build_model, infer_arch
+    state = torch.load(io.BytesIO(weights_bytes), map_location="cpu")
+    h, n = infer_arch(state)
+    model = build_model(hidden=h, n_layers=n)
+    model.load_state_dict(state)
     model.eval()
     return [
         NeuralAgent(model=model, use_mcts=use_mcts, n_simulations=n_sims),

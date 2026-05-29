@@ -23,10 +23,12 @@ def _make_agent(name, weights_bytes=b''):
     if name == 'neural':
         import torch
         torch.set_num_threads(1)
-        from train.network import build_model
+        from train.network import build_model, infer_arch
         from agents.neural_agent import NeuralAgent
-        m = build_model()
-        m.load_state_dict(torch.load(io.BytesIO(weights_bytes), map_location='cpu'))
+        state = torch.load(io.BytesIO(weights_bytes), map_location='cpu')
+        h, n = infer_arch(state)
+        m = build_model(hidden=h, n_layers=n)
+        m.load_state_dict(state)
         m.eval()
         return NeuralAgent(model=m)
     raise ValueError(name)
