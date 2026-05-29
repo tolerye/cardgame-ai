@@ -28,6 +28,8 @@
       --shadow-lg: 0 8px 28px rgba(177, 151, 252, 0.25);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    /* 'hidden' 属性优先级低于 .sheet-overlay 等 display 规则，强制覆盖 */
+    [hidden] { display: none !important; }
     html, body { height: 100%; overflow-x: hidden; }
     body {
       font-family: -apple-system, "PingFang SC", "Hiragino Sans GB",
