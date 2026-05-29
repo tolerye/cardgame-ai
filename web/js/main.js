@@ -8,13 +8,21 @@
 import { GameEngine } from './engine.js';
 import { GameConfig } from './state.js';
 import { EVAgent, ExpectimaxAgent, GreedyAgent, RandomAgent } from './agents.js';
+import { NeuralAgent } from './neural-agent.js';
 import { HumanAgent, render, setupUI, showResult, resetFlashTracker, flashDrawnCard } from './ui.js';
+
+let _neuralPromise = null;
+function loadNeural() {
+  if (!_neuralPromise) _neuralPromise = NeuralAgent.load('model.json');
+  return _neuralPromise;
+}
 
 const FACTORIES = {
   exmax4: () => new ExpectimaxAgent({ depth: 4 }),
   exmax3: () => new ExpectimaxAgent({ depth: 3 }),
   exmax2: () => new ExpectimaxAgent({ depth: 2 }),
-  expectimax: () => new ExpectimaxAgent({ depth: 3 }),  // 别名
+  expectimax: () => new ExpectimaxAgent({ depth: 3 }),
+  neural: async () => await loadNeural(),
   ev: () => new EVAgent(),
   greedy: () => new GreedyAgent(),
   random: () => new RandomAgent(),
@@ -25,6 +33,7 @@ const NAME_CN = {
   exmax3: 'Exmax depth=3',
   exmax2: 'Exmax depth=2',
   expectimax: 'Expectimax',
+  neural: '神经网络',
   ev: 'EV',
   greedy: 'Greedy',
   random: 'Random',
@@ -74,9 +83,9 @@ async function startGame() {
   const human = new HumanAgent();
   const agents = [
     human,
-    wrapWithDelay(FACTORIES[oppKeys[1]]()),
-    wrapWithDelay(FACTORIES[oppKeys[2]]()),
-    wrapWithDelay(FACTORIES[oppKeys[3]]()),
+    wrapWithDelay(await FACTORIES[oppKeys[1]]()),
+    wrapWithDelay(await FACTORIES[oppKeys[2]]()),
+    wrapWithDelay(await FACTORIES[oppKeys[3]]()),
   ];
 
   const displayNames = ['你', NAME_CN[oppKeys[1]], NAME_CN[oppKeys[2]], NAME_CN[oppKeys[3]]];

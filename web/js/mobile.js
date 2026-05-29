@@ -6,9 +6,17 @@ import { GameEngine } from './engine.js';
 import { GameConfig, PlayerStatus } from './state.js';
 import { CardKind } from './cards.js';
 import { EVAgent, ExpectimaxAgent, GreedyAgent, RandomAgent } from './agents.js';
+import { NeuralAgent } from './neural-agent.js';
 import { estimate as estimateWinrate } from './winrate.js';
 
 // ============================================================ 全局
+// 神经网络 lazy 加载
+let _neuralPromise = null;
+function loadNeural() {
+  if (!_neuralPromise) _neuralPromise = NeuralAgent.load('model.json');
+  return _neuralPromise;
+}
+
 const FACTORY = {
   random: () => new RandomAgent(),
   greedy: () => new GreedyAgent(),
@@ -16,6 +24,7 @@ const FACTORY = {
   exmax2: () => new ExpectimaxAgent({ depth: 2 }),
   exmax3: () => new ExpectimaxAgent({ depth: 3 }),
   exmax4: () => new ExpectimaxAgent({ depth: 4 }),
+  neural: async () => await loadNeural(),
 };
 const NAME_CN = {
   random: '随机',
@@ -24,6 +33,7 @@ const NAME_CN = {
   exmax2: '期望 D2',
   exmax3: '期望 D3',
   exmax4: '期望 D4',
+  neural: '神经网',
 };
 const OPP_EMOJI = {
   random: '🎲',
@@ -32,6 +42,7 @@ const OPP_EMOJI = {
   exmax2: '🧠',
   exmax3: '🧠',
   exmax4: '🧠',
+  neural: '🤖✨',
 };
 
 let engine;
@@ -83,7 +94,11 @@ async function startGame() {
 
   const cfg = new GameConfig({ numPlayers: 4, targetScore: target });
   const human = new HumanAgent();
-  const aiAgents = oppKeys.map(k => wrapWithDelay(FACTORY[k]()));
+  const aiAgents = [];
+  for (const k of oppKeys) {
+    const a = await FACTORY[k]();
+    aiAgents.push(wrapWithDelay(a));
+  }
   engine = new GameEngine(cfg, [human, ...aiAgents]);
 
   try {
