@@ -14,6 +14,7 @@ import {
   GameConfig, GameState, PlayerState, PlayerStatus,
 } from './state.js';
 import { ExpectimaxAgent, EVAgent } from './agents.js';
+import { estimate as estimateWinrate } from './winrate.js';
 
 // ============================================================ 全局状态
 let state;            // GameState
@@ -962,11 +963,83 @@ function applyOCRtoState(validRows) {
   render();
 }
 
+// ============================================================ 胜率预估面板
+function setupWinrate() {
+  const btn = document.getElementById('winrate-run');
+  if (!btn) return;
+  btn.addEventListener('click', runWinrate);
+}
+
+async function runWinrate() {
+  const btn = document.getElementById('winrate-run');
+  const status = document.getElementById('winrate-status');
+  const resultEl = document.getElementById('winrate-result');
+  const nSims = parseInt(document.getElementById('winrate-sims').value) || 300;
+
+  const scores = state.players.map(p => p.totalScore);
+  const target = state.config.targetScore;
+  const agents = ['ev', 'ev', 'ev', 'ev'];
+
+  if (scores.every(s => s >= target)) {
+    resultEl.innerHTML = '<span style="color:var(--text-dim)">所有人都已达到目标分</span>';
+    return;
+  }
+
+  btn.disabled = true;
+  status.textContent = `0/${nSims}`;
+  try {
+    const result = await estimateWinrate(scores, agents, target, nSims, (done, total) => {
+      status.textContent = `${done}/${total}`;
+    });
+    let topRank1 = 0;
+    for (let i = 0; i < 4; i++) {
+      if (result.rankProb[i][0] > result.rankProb[topRank1][0]) topRank1 = i;
+    }
+    let html = `<div style="margin-bottom:6px;font-size:12px">${nSims} 局模拟，${(result.elapsedMs / 1000).toFixed(1)}s · 最有可能夺冠：<b style="color:var(--green)">P${topRank1}</b> ${(result.rankProb[topRank1][0]*100).toFixed(0)}%</div>`;
+    html += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+    html += '<thead style="color:var(--text-dim);font-size:11px"><tr>'
+      + '<th style="text-align:left;padding:4px 6px">玩家</th>'
+      + '<th style="text-align:right;padding:4px 6px">当前</th>'
+      + '<th style="text-align:right;padding:4px 6px">1名</th>'
+      + '<th style="text-align:right;padding:4px 6px">2名</th>'
+      + '<th style="text-align:right;padding:4px 6px">3名</th>'
+      + '<th style="text-align:right;padding:4px 6px">4名</th>'
+      + '<th style="text-align:right;padding:4px 6px">E[终]</th>'
+      + '</tr></thead><tbody>';
+    for (let i = 0; i < 4; i++) {
+      const star = i === 0 ? '★ ' : '';
+      const me = i === 0 ? 'background:rgba(63,185,80,0.08)' : '';
+      const [p1, p2, p3, p4] = result.rankProb[i].map(x => x * 100);
+      const ef = result.expectedFinal[i];
+      const c1 = p1 >= 50 ? 'color:var(--green);font-weight:600' : (p1 < 10 ? 'color:var(--text-dim)' : '');
+      const c4 = p4 >= 50 ? 'color:var(--red)' : '';
+      html += `<tr style="${me}">`
+        + `<td style="padding:4px 6px">${star}P${i}</td>`
+        + `<td style="text-align:right;padding:4px 6px">${scores[i]}</td>`
+        + `<td style="text-align:right;padding:4px 6px;${c1}">${p1.toFixed(0)}%</td>`
+        + `<td style="text-align:right;padding:4px 6px">${p2.toFixed(0)}%</td>`
+        + `<td style="text-align:right;padding:4px 6px">${p3.toFixed(0)}%</td>`
+        + `<td style="text-align:right;padding:4px 6px;${c4}">${p4.toFixed(0)}%</td>`
+        + `<td style="text-align:right;padding:4px 6px;color:var(--text-dim)">${ef.toFixed(0)}</td>`
+        + `</tr>`;
+    }
+    html += '</tbody></table>';
+    resultEl.innerHTML = html;
+    status.textContent = '';
+  } catch (e) {
+    console.error(e);
+    resultEl.innerHTML = `<span style="color:var(--red)">模拟出错：${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ============================================================ 入口
 document.addEventListener('DOMContentLoaded', () => {
   reset();
   setupKeyboard();
   setupOCR();
+  setupWinrate();
   document.getElementById('action-fold').addEventListener('click', () => fold(activeIdx));
   document.getElementById('action-bust').addEventListener('click', () => bust(activeIdx));
   document.getElementById('undo-btn').addEventListener('click', undo);

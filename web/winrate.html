@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>胜率预估 · 6翻了</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .winrate-form {
+      display: grid;
+      grid-template-columns: 100px 1fr 1fr 1fr;
+      gap: 8px 12px;
+      align-items: center;
+      margin: 16px 0;
+    }
+    .winrate-form label { font-size: 13px; color: var(--text-dim); }
+    .winrate-form input, .winrate-form select {
+      width: 100%; padding: 6px 10px;
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-size: 14px;
+    }
+    .winrate-form .row-label { font-weight: 600; color: var(--text); }
+    .top-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 12px; }
+    .top-row label { display: flex; flex-direction: column; gap: 4px; }
+    .progress {
+      width: 100%; height: 6px; background: var(--panel-2);
+      border-radius: 3px; overflow: hidden; margin: 12px 0;
+    }
+    .progress-bar { height: 100%; background: var(--accent); transition: width .1s; width: 0; }
+
+    .result-table {
+      width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px;
+    }
+    .result-table th, .result-table td {
+      padding: 10px 12px; text-align: right;
+      border-bottom: 1px solid var(--border);
+    }
+    .result-table th:first-child, .result-table td:first-child { text-align: left; }
+    .result-table thead { background: var(--panel-2); color: var(--text-dim); font-weight: 600; }
+    .result-table .me { background: rgba(63, 185, 80, 0.08); }
+    .pct-bar {
+      display: inline-block; height: 18px; vertical-align: middle;
+      background: var(--accent); margin-left: 6px; opacity: .35; border-radius: 2px;
+    }
+    .pct-1st { background: var(--green); opacity: .5; }
+    .pct-4th { background: var(--red); opacity: .35; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <section class="card">
+      <div style="display:flex;gap:16px;margin-bottom:12px;font-size:14px">
+        <a href="index.html" style="color:var(--text-dim);text-decoration:none;padding-bottom:4px">🎲 开始游戏</a>
+        <a href="advisor.html" style="color:var(--text-dim);text-decoration:none;padding-bottom:4px">🔮 决策助手</a>
+        <a href="winrate.html" style="color:var(--accent);text-decoration:none;border-bottom:2px solid var(--accent);padding-bottom:4px">📊 胜率预估</a>
+      </div>
+      <h1>📊 胜率预估</h1>
+      <p class="subtitle">输入 4 人当前总分，蒙特卡洛模拟若干场到比赛结束，计算每人 1/2/3/4 名的概率。</p>
+
+      <div class="top-row">
+        <label>
+          目标分
+          <input type="number" id="target" value="200" min="50" max="500" step="10">
+        </label>
+        <label>
+          模拟次数
+          <select id="n-sims">
+            <option value="50">50（快，~1s）</option>
+            <option value="200" selected>200（推荐，~3s）</option>
+            <option value="500">500（更准，~8s）</option>
+            <option value="1000">1000（最准，~15s）</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="winrate-form">
+        <div></div>
+        <div style="font-size: 12px; color: var(--text-dim);">名字</div>
+        <div style="font-size: 12px; color: var(--text-dim);">总分</div>
+        <div style="font-size: 12px; color: var(--text-dim);">风格（用于模拟）</div>
+
+        <span class="row-label">P0 ★ 你</span>
+        <input type="text" id="name-0" value="你">
+        <input type="number" id="score-0" value="0" min="0" max="500">
+        <select id="agent-0">
+          <option value="exmax3" selected>exmax3 强</option>
+          <option value="ev">ev 中</option>
+          <option value="greedy">greedy 弱</option>
+          <option value="exmax4">exmax4 最强（慢）</option>
+          <option value="exmax2">exmax2 较弱</option>
+          <option value="random">random 随机</option>
+        </select>
+
+        <span class="row-label">P1</span>
+        <input type="text" id="name-1" value="P1">
+        <input type="number" id="score-1" value="0" min="0" max="500">
+        <select id="agent-1">
+          <option value="exmax3" selected>exmax3 强</option>
+          <option value="ev">ev 中</option>
+          <option value="greedy">greedy 弱</option>
+          <option value="exmax4">exmax4 最强（慢）</option>
+          <option value="exmax2">exmax2 较弱</option>
+          <option value="random">random 随机</option>
+        </select>
+
+        <span class="row-label">P2</span>
+        <input type="text" id="name-2" value="P2">
+        <input type="number" id="score-2" value="0" min="0" max="500">
+        <select id="agent-2">
+          <option value="exmax3" selected>exmax3 强</option>
+          <option value="ev">ev 中</option>
+          <option value="greedy">greedy 弱</option>
+          <option value="exmax4">exmax4 最强（慢）</option>
+          <option value="exmax2">exmax2 较弱</option>
+          <option value="random">random 随机</option>
+        </select>
+
+        <span class="row-label">P3</span>
+        <input type="text" id="name-3" value="P3">
+        <input type="number" id="score-3" value="0" min="0" max="500">
+        <select id="agent-3">
+          <option value="exmax3" selected>exmax3 强</option>
+          <option value="ev">ev 中</option>
+          <option value="greedy">greedy 弱</option>
+          <option value="exmax4">exmax4 最强（慢）</option>
+          <option value="exmax2">exmax2 较弱</option>
+          <option value="random">random 随机</option>
+        </select>
+      </div>
+
+      <button id="run-btn" class="primary big">开始模拟</button>
+
+      <div class="progress" id="progress" hidden>
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+
+      <div id="result" hidden></div>
+
+      <details style="margin-top: 16px;">
+        <summary style="color: var(--text-dim); cursor: pointer; font-size: 13px;">说明</summary>
+        <ul style="margin: 8px 0 0 24px; font-size: 13px; color: var(--text-dim);">
+          <li>每次模拟从输入的总分起，按选择的"风格"打到比赛结束（有人达到目标分）</li>
+          <li>统计每人最终排名 1/2/3/4 的频次，得到概率</li>
+          <li>"风格"决定模拟里那个位置的玩家怎么决策；玩家本人的实际打法可能比 ev 更好或更差</li>
+          <li>模拟次数越多越准，500 局以上结果稳定到 ±2pp 内</li>
+        </ul>
+      </details>
+    </section>
+  </div>
+  <script type="module" src="js/winrate-page.js"></script>
+</body>
+</html>

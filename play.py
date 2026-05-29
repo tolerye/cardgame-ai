@@ -126,11 +126,51 @@ class HumanAgent(BaseAgent):
         # 缓存本局所有事件（按玩家分类），跨回合可见
         self._round_events: List[str] = []
         self._round_events_round = 0
+        # 显示胜率预估面板（每回合摸/跑前给一个 MC 估计）
+        self.show_winrate = True
+        self.winrate_n_sims = 80
+        # 4 人显示名（含自己），由 main() 设置
+        self.player_names: List[str] = []
+
+    def _print_winrate(self, state: GameState, my_idx: int) -> None:
+        """实时跑 MC，打一行简洁概率面板。"""
+        try:
+            from win_estimator import estimate
+        except Exception:
+            return
+        # 全用 ev 当 rollout（足够近似且快）
+        agent_names = ['ev'] * state.config.num_players
+        try:
+            est = estimate(state, agent_names,
+                           n_sims=self.winrate_n_sims, n_workers=1)
+        except Exception as e:
+            print(DIM(f"  [胜率预估失败：{e}]"))
+            return
+        names = self.player_names or [f"P{i}" for i in range(state.config.num_players)]
+        print(DIM(f"  🎲 胜率预估（{est.n_sims} 局 MC, {est.elapsed*1000:.0f}ms）："))
+        head = f"{'玩家':<10} {'1名':>6} {'2名':>6} {'3名':>6} {'4名':>6}"
+        if est.has_active_round:
+            head += f"  {'本局头名':>8}  {'E[本局+]':>8}"
+        print(DIM(f"     {head}"))
+        for p in est.players:
+            nm = names[p.idx] if p.idx < len(names) else f"P{p.idx}"
+            you = BOLD(GREEN(' ★')) if p.idx == my_idx else '  '
+            p1, p2, p3, p4 = (x * 100 for x in p.p_rank)
+            row = f"{nm:<10} {p1:>5.1f}% {p2:>5.1f}% {p3:>5.1f}% {p4:>5.1f}%"
+            if est.has_active_round:
+                rw = p.p_round_win * 100
+                row += f"  {rw:>7.1f}%  {p.expected_round_gain:>+8.1f}"
+            # 第一名概率最高的高亮
+            color = GREEN if p.p_rank[0] >= 0.4 else (YELLOW if p.p_rank[0] >= 0.2 else (lambda s: s))
+            print(f"    {you} {color(row)}")
+        print()
 
     def choose_action(self, state: GameState, my_idx: int) -> str:
         self._my_idx = my_idx
         self._catch_up_logs(state)
         self._render(state, my_idx)
+        if self.show_winrate:
+            self._print_winrate(state, my_idx)
         while True:
             try:
                 raw = input(BOLD(f"\n  P{my_idx}（你）→ 选择 [d=要牌, f=跑路, q=退出]: ")).strip().lower()
@@ -397,6 +437,9 @@ def main() -> None:
                         help="3 个 AI 对手，逗号分隔；不传则进入交互选择")
     parser.add_argument("--target", type=int, default=200, help="比赛目标分（默认 200）")
     parser.add_argument("--list", action="store_true", help="列出所有可用 AI 类型")
+    parser.add_argument("--no-winrate", action="store_true", help="关闭实时胜率预估面板")
+    parser.add_argument("--winrate-sims", type=int, default=80,
+                        help="胜率预估 MC 模拟数（默认 80，越大越准但越慢）")
     args = parser.parse_args()
 
     if args.list:
@@ -434,7 +477,11 @@ def main() -> None:
     print()
 
     cfg = GameConfig(num_players=4, target_score=args.target)
-    agents = [HumanAgent()] + [OPP_REGISTRY[n]() for n in names]
+    human = HumanAgent()
+    human.show_winrate = not args.no_winrate
+    human.winrate_n_sims = args.winrate_sims
+    human.player_names = ["你"] + names
+    agents = [human] + [OPP_REGISTRY[n]() for n in names]
     engine = GameEngine(cfg, agents)
     winner = engine.play_match()
 

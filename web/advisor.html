@@ -218,6 +218,7 @@
     <div class="nav">
       <a href="index.html">🎲 开始游戏</a>
       <a href="advisor.html" class="active">🔮 实时助手</a>
+      <a href="winrate.html">📊 胜率预估</a>
     </div>
 
     <div class="top-bar">
@@ -292,6 +293,23 @@
 
     <!-- 玩家网格 -->
     <div class="players" id="players"></div>
+
+    <!-- 胜率预估面板 -->
+    <div class="panel" id="winrate-panel">
+      <h4 style="display:flex;align-items:center;gap:10px">
+        🏆 当前局势胜率预估
+        <button id="winrate-run" class="undo-btn" style="font-size:12px">▶ 模拟</button>
+        <select id="winrate-sims" style="font-size:12px;padding:2px 6px;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:3px">
+          <option value="100">100 局</option>
+          <option value="300" selected>300 局</option>
+          <option value="600">600 局</option>
+        </select>
+        <span id="winrate-status" style="font-size:12px;color:var(--text-dim);margin-left:auto"></span>
+      </h4>
+      <div id="winrate-result" style="font-size:13px;color:var(--text-dim)">
+        点"模拟"按钮，根据当前 4 人总分预估每人 1/2/3/4 名概率
+      </div>
+    </div>
 
     <!-- 概率分解 -->
     <div class="panel" id="probs-panel" hidden>
