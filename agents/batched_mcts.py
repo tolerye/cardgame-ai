@@ -28,7 +28,7 @@ from agents.mcts_agent import _hollow_engine
 from game.cards import CardKind
 from game.engine import GameEngine
 from game.state import GameState, PlayerStatus
-from train.encoder import encode_state
+from train.encoder import encode_for_model
 
 
 VIRTUAL_LOSS = 1.0  # discourages other parallel sims from re-picking same action
@@ -141,7 +141,7 @@ class BatchedNeuralMCTSAgent(BaseAgent):
         if self.model is None:
             return np.full((len(states), 2), 0.5, dtype=np.float32)
         import torch
-        x = np.stack([encode_state(s, idx) for s, idx in states])
+        x = np.stack([encode_for_model(s, idx, self.model) for s, idx in states])
         with torch.no_grad():
             X = torch.from_numpy(x).to(self.device)
             logits, _ = self.model(X)
@@ -165,7 +165,7 @@ class BatchedNeuralMCTSAgent(BaseAgent):
             return ev_signal
 
         import torch
-        x = np.stack([encode_state(s, idx) for s, idx in states])
+        x = np.stack([encode_for_model(s, idx, self.model) for s, idx in states])
         with torch.no_grad():
             X = torch.from_numpy(x).to(self.device)
             _, v = self.model(X)

@@ -151,3 +151,27 @@ def encode_state(state: GameState, my_idx: int) -> np.ndarray:
         feats.extend([0.0, 0.0, 0.0])
 
     return np.array(feats, dtype=np.float32)
+
+
+# v1 encoder (62 维，向后兼容)：用于加载旧 checkpoint
+FEATURE_DIM_V1 = 62
+
+
+def encode_state_v1(state: GameState, my_idx: int) -> np.ndarray:
+    """旧版本 62 维 encoder，跟当前 v2 的前 62 维布局完全一致。
+    用于加载 v1 训练的 checkpoint（如 model_v1_baseline.pt）。"""
+    return encode_state(state, my_idx)[:FEATURE_DIM_V1]
+
+
+def encode_for_model(state: GameState, my_idx: int, model) -> np.ndarray:
+    """根据模型的输入维度自动选择 v1 / v2 encoder。"""
+    in_dim = getattr(model, 'in_dim', None)
+    if in_dim is None:
+        # 从第一层权重反推
+        try:
+            in_dim = model.trunk[0].in_features
+        except Exception:
+            in_dim = FEATURE_DIM
+    if in_dim == FEATURE_DIM_V1:
+        return encode_state_v1(state, my_idx)
+    return encode_state(state, my_idx)

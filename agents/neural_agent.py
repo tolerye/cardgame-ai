@@ -10,7 +10,7 @@ from agents.base import BaseAgent
 from agents.ev_agent import EVAgent
 from game.cards import CardKind
 from game.state import GameState
-from train.encoder import encode_state
+from train.encoder import encode_for_model
 
 
 class NeuralAgent(BaseAgent):
@@ -45,7 +45,7 @@ class NeuralAgent(BaseAgent):
             return self._mcts_agent.choose_action(state, my_idx)
         # raw policy head
         import torch
-        x = torch.from_numpy(encode_state(state, my_idx)).unsqueeze(0)
+        x = torch.from_numpy(encode_for_model(state, my_idx, self.model)).unsqueeze(0)
         with torch.no_grad():
             logits, _ = self.model(x)
         idx = int(torch.argmax(logits, dim=-1).item())
