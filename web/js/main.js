@@ -11,13 +11,19 @@ import { EVAgent, ExpectimaxAgent, GreedyAgent, RandomAgent } from './agents.js'
 import { HumanAgent, render, setupUI, showResult, resetFlashTracker, flashDrawnCard } from './ui.js';
 
 const FACTORIES = {
-  expectimax: () => new ExpectimaxAgent(),
+  exmax4: () => new ExpectimaxAgent({ depth: 4 }),
+  exmax3: () => new ExpectimaxAgent({ depth: 3 }),
+  exmax2: () => new ExpectimaxAgent({ depth: 2 }),
+  expectimax: () => new ExpectimaxAgent({ depth: 3 }),  // 别名
   ev: () => new EVAgent(),
   greedy: () => new GreedyAgent(),
   random: () => new RandomAgent(),
 };
 
 const NAME_CN = {
+  exmax4: 'Exmax depth=4',
+  exmax3: 'Exmax depth=3',
+  exmax2: 'Exmax depth=2',
   expectimax: 'Expectimax',
   ev: 'EV',
   greedy: 'Greedy',

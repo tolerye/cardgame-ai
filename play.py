@@ -328,7 +328,10 @@ class HumanAgent(BaseAgent):
 
 # --------------------------------------------------------------- AI 注册
 OPP_REGISTRY: Dict[str, callable] = {
-    "expectimax": lambda: ExpectimaxAgent(),
+    "exmax4": lambda: ExpectimaxAgent(depth=4),
+    "exmax3": lambda: ExpectimaxAgent(depth=3),
+    "exmax2": lambda: ExpectimaxAgent(depth=2),
+    "expectimax": lambda: ExpectimaxAgent(depth=3),  # 别名
     "ev": lambda: EVAgent(),
     "greedy": lambda: GreedyAgent(),
     "greedy20": lambda: GreedyAgent(fold_at=20),
@@ -336,30 +339,62 @@ OPP_REGISTRY: Dict[str, callable] = {
 }
 
 OPP_NAME_CN = {
-    "expectimax": "期望值递归（最强 40%）",
-    "ev": "启发式期望（35%）",
-    "greedy": "固定阈值贪心（24%）",
+    "exmax4": "期望递归 depth=4（最强 26.5%）",
+    "exmax3": "期望递归 depth=3（26%）",
+    "exmax2": "期望递归 depth=2（24.5%）",
+    "expectimax": "期望递归（depth=3）",
+    "ev": "启发式 EV（26%）",
+    "greedy": "固定阈值贪心",
     "greedy20": "激进贪心",
     "random": "随机",
-    "neural": "神经网络（21%）",
-    "neural_mcts": "神经网络+搜索",
+    "neural": "神经网络（25.5%）",
+    "neural_mcts": "神经网络+MCTS",
 }
 
 
 def _maybe_register_neural() -> None:
     try:
         from agents.neural_agent import NeuralAgent
-        OPP_REGISTRY["neural"] = lambda: NeuralAgent("model.pt")
-        OPP_REGISTRY["neural_mcts"] = lambda: NeuralAgent("model.pt", use_mcts=True, n_simulations=80)
+        OPP_REGISTRY["neural"] = lambda: NeuralAgent("checkpoints/model_best.pt")
+        OPP_REGISTRY["neural_mcts"] = lambda: NeuralAgent("checkpoints/model_best.pt", use_mcts=True, n_simulations=80)
     except Exception:
         pass
+
+
+def _interactive_pick_opponents() -> list[str]:
+    keys = list(OPP_REGISTRY.keys())
+    print(BOLD(CYAN("\n━━━━━━━━━ 选择 3 个对手 ━━━━━━━━━")))
+    for i, k in enumerate(keys, start=1):
+        cn = OPP_NAME_CN.get(k, "")
+        print(f"  {i:>2}. {k:<14} {DIM(cn)}")
+    chosen: list[str] = []
+    while len(chosen) < 3:
+        try:
+            raw = input(f"  对手 {len(chosen)+1}（输序号或名称，回车=expectimax，q=退出）: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            sys.exit(0)
+        if raw == 'q':
+            sys.exit(0)
+        if not raw:
+            chosen.append("exmax3")
+            continue
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(keys):
+                chosen.append(keys[n - 1])
+                continue
+        if raw in OPP_REGISTRY:
+            chosen.append(raw)
+            continue
+        print(RED(f"  '{raw}' 无效，请重选"))
+    return chosen
 
 
 def main() -> None:
     _maybe_register_neural()
     parser = argparse.ArgumentParser(description="终端版牌局对战")
-    parser.add_argument("--opponents", default="expectimax,ev,greedy",
-                        help="3 个 AI 对手，逗号分隔")
+    parser.add_argument("--opponents", default=None,
+                        help="3 个 AI 对手，逗号分隔；不传则进入交互选择")
     parser.add_argument("--target", type=int, default=200, help="比赛目标分（默认 200）")
     parser.add_argument("--list", action="store_true", help="列出所有可用 AI 类型")
     args = parser.parse_args()
@@ -371,7 +406,10 @@ def main() -> None:
             print(f"  {name:<14} {cn}")
         return
 
-    names = [n.strip() for n in args.opponents.split(",")]
+    if args.opponents is None:
+        names = _interactive_pick_opponents()
+    else:
+        names = [n.strip() for n in args.opponents.split(",")]
     if len(names) != 3:
         print(f"必须正好 3 个对手，给了 {len(names)} 个")
         sys.exit(1)
