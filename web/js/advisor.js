@@ -353,7 +353,18 @@ function computeReco() {
     html: `<div class="verdict">${verdict}</div><div class="reason">${reason}</div>`,
     cls, emoji,
     evHTML: `<div class="ev">EV摸 ${evDraw.toFixed(1)}<br>EV跑 ${evFold.toFixed(1)}</div>`,
-    pBust, pSix, pSafe,
+    pBust, pSix, pSafe, pSafeNonSix: pSafe - pSix,
+    evDraw, evFold, decision,
+    avgSafe: (function() {
+      let s = 0;
+      for (let v = 0; v <= 12; v++) if (!handSet.has(v)) s += v * state.remaining.numbers[v];
+      return safeC > 0 ? s / safeC : 0;
+    })(),
+    handSum: me.handNumbers.reduce((s, v) => s + v, 0),
+    cur,
+    target,
+    nUnique: handSet.size,
+    hasInsurance: me.hasInsurance,
   };
 }
 
@@ -385,9 +396,147 @@ function render() {
 
   // 概率细节
   renderProbs(reco);
+  renderRecoDetail(reco);
 
   // 历史日志
   renderLog();
+}
+
+function renderRecoDetail(reco) {
+  const panel = document.getElementById('reco-detail-panel');
+  if (!reco || reco.pBust === undefined) {
+    if (panel) panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const el = document.getElementById('reco-detail');
+  const total = Math.max(state.remaining.total(), 1);
+  const rem = state.remaining;
+  const pFlat = rem.bonus_flat / total * 100;
+  const pDouble = rem.bonus_double / total * 100;
+  const pIns = rem.insurance / total * 100;
+  const pExile = rem.exile / total * 100;
+  const pTriple = rem.triple / total * 100;
+
+  const cur = reco.cur;
+  const handSum = reco.handSum;
+  const evDraw = reco.evDraw;
+  const evFold = reco.evFold;
+  const diff = evDraw - evFold;
+  const confidence = Math.min(100, Math.abs(diff) / Math.max(Math.abs(evFold), 5) * 100);
+  const confColor = confidence >= 50 ? 'var(--green)' : confidence >= 20 ? 'var(--yellow)' : 'var(--red)';
+
+  const successRate = 100 - reco.pBust;
+  const bustCost = reco.hasInsurance ? 0 : -cur;
+
+  let html = `
+    <div style="display:flex;gap:24px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <div style="color:var(--text-dim);font-size:11px">📥 摸牌</div>
+        <div style="font-size:18px;font-weight:600">EV ${evDraw.toFixed(1)} 分</div>
+        <div style="font-size:12px;color:var(--text-dim)">不爆率 ${successRate.toFixed(1)}% · 爆牌 ${reco.pBust.toFixed(1)}%</div>
+      </div>
+      <div style="flex:1;min-width:180px">
+        <div style="color:var(--text-dim);font-size:11px">🔒 跑路</div>
+        <div style="font-size:18px;font-weight:600">EV ${evFold.toFixed(1)} 分</div>
+        <div style="font-size:12px;color:var(--text-dim)">立即锁定 ${cur} 分</div>
+      </div>
+      <div style="flex:1;min-width:180px">
+        <div style="color:var(--text-dim);font-size:11px">差值（摸 - 跑）</div>
+        <div style="font-size:18px;font-weight:600;color:${diff > 0 ? 'var(--green)' : 'var(--red)'}">${diff > 0 ? '+' : ''}${diff.toFixed(1)} 分</div>
+        <div style="font-size:12px;color:${confColor}">建议：<b>${reco.decision === 'draw' ? '🎲 摸' : '🔒 跑'}</b> · 置信度 ${confidence.toFixed(0)}%</div>
+      </div>
+    </div>
+
+    <div style="background:var(--panel-2);padding:10px 12px;border-radius:6px;margin-bottom:8px">
+      <div style="color:var(--text-dim);font-size:11px;margin-bottom:6px">📊 摸到下一张牌的概率分解（含期望加分）</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead style="color:var(--text-dim);font-size:11px">
+          <tr>
+            <th style="text-align:left;padding:3px 6px">类型</th>
+            <th style="text-align:right;padding:3px 6px">概率</th>
+            <th style="text-align:right;padding:3px 6px">期望加分</th>
+            <th style="text-align:left;padding:3px 6px">说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="${reco.pBust > 30 ? 'color:var(--red)' : reco.pBust > 15 ? 'color:var(--yellow)' : ''}">
+            <td style="padding:3px 6px">💥 爆牌</td>
+            <td style="text-align:right;padding:3px 6px"><b>${reco.pBust.toFixed(1)}%</b></td>
+            <td style="text-align:right;padding:3px 6px">${reco.hasInsurance ? '0（保险免）' : `${bustCost}（归零）`}</td>
+            <td style="padding:3px 6px;color:var(--text-dim)">${reco.hasInsurance ? '消耗保险' : `本局 ${cur} 分清零`}</td>
+          </tr>
+  `;
+
+  if (reco.nUnique < 5) {
+    html += `
+      <tr style="color:var(--green)">
+        <td style="padding:3px 6px">✅ 安全数字</td>
+        <td style="text-align:right;padding:3px 6px"><b>${reco.pSafeNonSix.toFixed(1)}%</b></td>
+        <td style="text-align:right;padding:3px 6px">+${reco.avgSafe.toFixed(1)}</td>
+        <td style="padding:3px 6px;color:var(--text-dim)">凑齐 ${reco.nUnique + 1} 个不同</td>
+      </tr>
+    `;
+  } else if (reco.nUnique === 5) {
+    html += `
+      <tr style="color:var(--yellow);font-weight:600">
+        <td style="padding:3px 6px">🚀 6 翻终结</td>
+        <td style="text-align:right;padding:3px 6px"><b>${reco.pSix.toFixed(1)}%</b></td>
+        <td style="text-align:right;padding:3px 6px">+${(reco.avgSafe + 15).toFixed(1)}</td>
+        <td style="padding:3px 6px;color:var(--text-dim)">+15 奖励 + 全场结算</td>
+      </tr>
+    `;
+  }
+
+  html += `
+          <tr>
+            <td style="padding:3px 6px">🟢 加分牌</td>
+            <td style="text-align:right;padding:3px 6px">${pFlat.toFixed(1)}%</td>
+            <td style="text-align:right;padding:3px 6px">+6（平均）</td>
+            <td style="padding:3px 6px;color:var(--text-dim)">+2/+4/+6/+8/+10</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 6px">🟢 翻倍</td>
+            <td style="text-align:right;padding:3px 6px">${pDouble.toFixed(1)}%</td>
+            <td style="text-align:right;padding:3px 6px">+${handSum}</td>
+            <td style="padding:3px 6px;color:var(--text-dim)">数字总和翻倍</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 6px">🛡 保险</td>
+            <td style="text-align:right;padding:3px 6px">${pIns.toFixed(1)}%</td>
+            <td style="text-align:right;padding:3px 6px">~+5</td>
+            <td style="padding:3px 6px;color:var(--text-dim)">免一次爆牌</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 6px">🚷 放逐</td>
+            <td style="text-align:right;padding:3px 6px">${pExile.toFixed(1)}%</td>
+            <td style="text-align:right;padding:3px 6px">~+5</td>
+            <td style="padding:3px 6px;color:var(--text-dim)">强制对手跑路</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 6px">⚡ 三连</td>
+            <td style="text-align:right;padding:3px 6px">${pTriple.toFixed(1)}%</td>
+            <td style="text-align:right;padding:3px 6px">~+5</td>
+            <td style="padding:3px 6px;color:var(--text-dim)">连摸 3 张</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const tips = [];
+  if (state.players[activeIdx].totalScore + cur >= reco.target) {
+    tips.push(`<div style="color:var(--green);font-weight:600">🏆 现在跑路即可获胜！锁 ${cur} 分赢比赛</div>`);
+  }
+  if (reco.nUnique === 5 && reco.pSix > 50) {
+    tips.push(`<div style="color:var(--yellow)">🚀 5 张冲刺机会：6 翻概率 ${reco.pSix.toFixed(0)}%，建议拼一把</div>`);
+  }
+  if (reco.pBust > 35) {
+    tips.push(`<div style="color:var(--red)">⚠ 高风险：爆牌概率 ${reco.pBust.toFixed(1)}%，强烈建议跑路</div>`);
+  }
+  if (tips.length) html += `<div style="font-size:13px">${tips.join('')}</div>`;
+
+  el.innerHTML = html;
 }
 
 function renderPlayer(p) {

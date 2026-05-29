@@ -129,8 +129,19 @@ class HumanAgent(BaseAgent):
         # 显示胜率预估面板（每回合摸/跑前给一个 MC 估计）
         self.show_winrate = True
         self.winrate_n_sims = 80
+        # 显示决策建议面板（每回合给摸/跑建议 + 概率分解）
+        self.show_reco = True
         # 4 人显示名（含自己），由 main() 设置
         self.player_names: List[str] = []
+
+    def _print_reco(self, state: GameState, my_idx: int) -> None:
+        """每回合给摸/跑建议 + 概率分解（复用 advisor.py 的分析）。"""
+        try:
+            from advisor import analyze, render_analysis
+            a = analyze(state, my_idx)
+            render_analysis(a, state, my_idx)
+        except Exception as e:
+            print(DIM(f"  [决策建议失败：{e}]"))
 
     def _print_winrate(self, state: GameState, my_idx: int) -> None:
         """实时跑 MC，打一行简洁概率面板。"""
@@ -169,6 +180,8 @@ class HumanAgent(BaseAgent):
         self._my_idx = my_idx
         self._catch_up_logs(state)
         self._render(state, my_idx)
+        if self.show_reco:
+            self._print_reco(state, my_idx)
         if self.show_winrate:
             self._print_winrate(state, my_idx)
         while True:
@@ -430,6 +443,17 @@ def _interactive_pick_opponents() -> list[str]:
     return chosen
 
 
+def _ask_yes_no(prompt: str, default_yes: bool = True) -> bool:
+    suffix = "(Y/n)" if default_yes else "(y/N)"
+    try:
+        raw = input(f"  {prompt} {DIM(suffix)}: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        sys.exit(0)
+    if not raw:
+        return default_yes
+    return raw in ('y', 'yes', '是', '开', '开启', 'on', '1')
+
+
 def main() -> None:
     _maybe_register_neural()
     parser = argparse.ArgumentParser(description="终端版牌局对战")
@@ -440,6 +464,9 @@ def main() -> None:
     parser.add_argument("--no-winrate", action="store_true", help="关闭实时胜率预估面板")
     parser.add_argument("--winrate-sims", type=int, default=80,
                         help="胜率预估 MC 模拟数（默认 80，越大越准但越慢）")
+    parser.add_argument("--no-reco", action="store_true", help="关闭决策建议面板")
+    parser.add_argument("--no-prompt", action="store_true",
+                        help="不在开局前询问开关，直接用 CLI 参数（默认会问）")
     args = parser.parse_args()
 
     if args.list:
@@ -478,8 +505,29 @@ def main() -> None:
 
     cfg = GameConfig(num_players=4, target_score=args.target)
     human = HumanAgent()
-    human.show_winrate = not args.no_winrate
-    human.winrate_n_sims = args.winrate_sims
+    # 默认值（来自 CLI flags）
+    show_winrate = not args.no_winrate
+    show_reco = not args.no_reco
+    winrate_sims = args.winrate_sims
+    # 交互式询问（除非 --no-prompt）
+    if not args.no_prompt:
+        print(BOLD(CYAN("\n━━━━━━━━━ 辅助面板 ━━━━━━━━━")))
+        show_reco = _ask_yes_no("开启 AI 决策建议（每回合给摸/跑建议 + 概率分解）？",
+                                default_yes=show_reco)
+        show_winrate = _ask_yes_no("开启实时胜率预估（每回合 MC 模拟 4 人 1/2/3/4 名概率）？",
+                                   default_yes=show_winrate)
+        if show_winrate:
+            try:
+                raw = input(f"  胜率预估每次跑多少局？{DIM(f'(默认 {winrate_sims}，越大越准但越慢)')}: ").strip()
+                if raw:
+                    winrate_sims = max(20, min(500, int(raw)))
+            except (EOFError, KeyboardInterrupt):
+                sys.exit(0)
+            except ValueError:
+                pass
+    human.show_winrate = show_winrate
+    human.show_reco = show_reco
+    human.winrate_n_sims = winrate_sims
     human.player_names = ["你"] + names
     agents = [human] + [OPP_REGISTRY[n]() for n in names]
     engine = GameEngine(cfg, agents)
